@@ -19,16 +19,27 @@ def obtener_ruta_base():
         return ruta
     return os.path.abspath(os.path.dirname(__file__))
 
-def limpiar_nombre_carpeta(texto):
-    if pd.isna(texto) or texto is None:
-        return "Sin_Especificar"
-    s = str(texto).strip()
-    s = re.sub(r'[\\/*?:"<>|]', '-', s)
-    return s[:85].strip() or "Sin_Especificar"
+def sanitizar_nombre_carpeta(texto, max_len=None):
+    if texto is None or (isinstance(texto, float) and pd.isna(texto)):
+        valor = "Sin_Especificar"
+    else:
+        valor = str(texto).strip()
+
+    # Eliminar caracteres de control y caracteres prohibidos en carpetas/archivos
+    valor = re.sub(r'[\x00-\x1f\x7f]', '', valor)
+    valor = re.sub(r'[\\/:*?"<>|]+', '-', valor)
+    valor = re.sub(r'\s+', ' ', valor).strip(' .-_')
+
+    if not valor:
+        valor = "Sin_Especificar"
+
+    if max_len is not None and len(valor) > max_len:
+        valor = valor[:max_len].rstrip(' .-_') or "Sesion"
+
+    return valor
 
 def cargar_datos_congreso():
     base = obtener_ruta_base()
-    # Busca los archivos en la misma carpeta o dentro de PAQUETE_USB_CONGRESO
     posibles_rutas = [base, os.path.join(base, "PAQUETE_USB_CONGRESO")]
     ruta_activa = base
     for r in posibles_rutas:
@@ -47,6 +58,22 @@ def cargar_datos_congreso():
 
     df = pd.read_excel(ruta_excel, engine='openpyxl').fillna("")
     return config, df, ruta_activa
+
+def construir_ruta_fila(row, config):
+    partes = ["PPT"]
+    orden_carpetas = config.get("orden_carpetas", [])
+    sep_n3 = config.get("separador_nivel_3", " - ")
+    max_n3 = int(config.get("max_chars_nivel_3", 50))
+
+    for item in orden_carpetas:
+        if isinstance(item, list):
+            valores = [str(row[c]).strip() for c in item if c in row and str(row[c]).strip()]
+            combinado = sep_n3.join(valores) if valores else "Sin_Especificar"
+            partes.append(sanitizar_nombre_carpeta(combinado, max_len=max_n3))
+        else:
+            if item in row:
+                partes.append(sanitizar_nombre_carpeta(row[item]))
+    return os.path.join(*partes)
 
 app = Flask(__name__)
 
@@ -236,12 +263,11 @@ HTML_APP = """<!DOCTYPE html>
             </div>
         {% else %}
 
-        <!-- Cabecera + Botones de Acción Rápida -->
         <div class="d-flex flex-wrap justify-content-between align-items-center mb-4 gap-3">
             <div>
                 <h4 class="fw-bold mb-1">Panel de Gestión de Ponencias y Salas</h4>
                 <p class="mb-0" style="color: var(--text-muted); font-size: 0.88rem;">
-                    Ruta activa: <code>{{ ruta_activa }}</code>
+                    Ruta activa: <code>{{ ruta_activa }}</code> · Sesión máx. <code>{{ config.max_chars_nivel_3 | default(50) }}</code> caracteres
                 </p>
             </div>
             <div class="d-flex flex-wrap gap-2">
@@ -256,7 +282,6 @@ HTML_APP = """<!DOCTYPE html>
 
         <div id="alertaAccion" class="alert d-none mb-4"></div>
 
-        <!-- 4 Tarjetas KPI -->
         <div class="row g-3 mb-4">
             <div class="col-sm-6 col-xl-3">
                 <div class="kpi-card kpi-blue">
@@ -284,15 +309,14 @@ HTML_APP = """<!DOCTYPE html>
             </div>
             <div class="col-sm-6 col-xl-3">
                 <div class="kpi-card kpi-orange">
-                    <div class="kpi-title">Jerarquía Activa</div>
-                    <div class="kpi-value">{{ config.orden_carpetas|length }} Niveles</div>
-                    <div class="kpi-sub">{{ config.orden_carpetas|join(' / ') }}</div>
+                    <div class="kpi-title">Nivel 3 Sesión</div>
+                    <div class="kpi-value">≤ {{ config.max_chars_nivel_3 | default(50) }} Car.</div>
+                    <div class="kpi-sub">{{ (config.nivel_3_columnas | join(' · ')) if config.nivel_3_columnas else 'Configurado' }}</div>
                     <svg class="kpi-wave" viewBox="0 0 200 40" preserveAspectRatio="none"><path d="M0,20 L45,28 L85,14 L130,26 L170,15 L200,24 L200,40 L0,40 Z" fill="#ffffff"/></svg>
                 </div>
             </div>
         </div>
 
-        <!-- Configuración rápida de Puesto + Tabla de Ponencias -->
         <div class="valex-card mb-4">
             <div class="valex-card-header">
                 <div>
@@ -432,13 +456,6 @@ function filtrarTabla() {
 </body>
 </html>"""
 
-def construir_ruta_fila(row, orden_carpetas):
-    partes = ["PPT"]
-    for col in orden_carpetas:
-        if col in row:
-            partes.append(limpiar_nombre_carpeta(row[col]))
-    return os.path.join(*partes)
-
 @app.route('/')
 def index():
     config, df, ruta_activa = cargar_datos_congreso()
@@ -447,12 +464,11 @@ def index():
 
     columnas = list(df.columns)
     col_sala = next((c for c in columnas if str(c).strip().lower() == 'sala'), None)
-    orden = config.get("orden_carpetas", [])
 
     filas = []
     con_archivo = 0
     for _, row in df.iterrows():
-        ruta_rel = construir_ruta_fila(row, orden)
+        ruta_rel = construir_ruta_fila(row, config)
         ruta_abs = os.path.join(ruta_activa, ruta_rel)
         archivos = [f for f in os.listdir(ruta_abs) if not f.startswith('.')] if os.path.exists(ruta_abs) else []
         tiene_ppt = len(archivos) > 0
@@ -460,7 +476,7 @@ def index():
             con_archivo += 1
         filas.append({
             "datos": {c: str(row[c]) for c in columnas},
-            "sala": str(row[col_sala]).strip() if col_sala else "",
+            "sala": sanitizar_nombre_carpeta(row[col_sala]) if col_sala else "",
             "ruta_relativa": ruta_rel,
             "tiene_ppt": tiene_ppt,
             "num_archivos": len(archivos)
@@ -482,10 +498,9 @@ def api_crear_carpetas():
     config, df, ruta_activa = cargar_datos_congreso()
     if config is None:
         return jsonify({"ok": False, "mensaje": "Faltan programa.xlsx o config_congreso.json"})
-    orden = config.get("orden_carpetas", [])
     creadas = 0
     for _, row in df.iterrows():
-        ruta_abs = os.path.join(ruta_activa, construir_ruta_fila(row, orden))
+        ruta_abs = os.path.join(ruta_activa, construir_ruta_fila(row, config))
         if not os.path.exists(ruta_abs):
             os.makedirs(ruta_abs, exist_ok=True)
             creadas += 1
@@ -508,8 +523,8 @@ def api_abrir_ruta():
 @app.route('/api/configurar-equipo', methods=['POST'])
 def api_configurar_equipo():
     config, _, _ = cargar_datos_congreso()
-    equipo = request.json.get("equipo", "").strip()
-    wg = config.get("workgroup", "CONGRESO") if config else "CONGRESO"
+    equipo = sanitizar_nombre_carpeta(request.json.get("equipo", "").strip(), max_len=15)
+    wg = sanitizar_nombre_carpeta(config.get("workgroup", "CONGRESO") if config else "CONGRESO", max_len=15)
     try:
         if SISTEMA == 'Windows':
             cmd = f'powershell -Command "Rename-Computer -NewName \'{equipo}\' -Force; Add-Computer -WorkgroupName \'{wg}\' -Force"'

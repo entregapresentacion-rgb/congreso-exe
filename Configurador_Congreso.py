@@ -1,4 +1,5 @@
 import os
+import re
 import sys
 import json
 import shutil
@@ -20,6 +21,25 @@ def obtener_ruta_base():
             return os.path.join(os.path.expanduser("~"), "Desktop")
         return ruta
     return os.path.abspath(os.path.dirname(__file__))
+
+def sanitizar_nombre_carpeta(texto, max_len=None):
+    if texto is None or (isinstance(texto, float) and pd.isna(texto)):
+        valor = "Sin_Especificar"
+    else:
+        valor = str(texto).strip()
+
+    # Eliminar caracteres de control y caracteres no válidos para nombres de carpeta/archivo
+    valor = re.sub(r'[\x00-\x1f\x7f]', '', valor)
+    valor = re.sub(r'[\\/:*?"<>|]+', '-', valor)
+    valor = re.sub(r'\s+', ' ', valor).strip(' .-_')
+
+    if not valor:
+        valor = "Sin_Especificar"
+
+    if max_len is not None and len(valor) > max_len:
+        valor = valor[:max_len].rstrip(' .-_') or "Sesion"
+
+    return valor
 
 app = Flask(__name__)
 
@@ -84,7 +104,6 @@ HTML_CONFIG = """<!DOCTYPE html>
             color: var(--text-muted);
             font-size: 0.875rem;
             font-weight: 500;
-            text-decoration: none;
             display: flex;
             align-items: center;
             gap: 7px;
@@ -132,8 +151,8 @@ HTML_CONFIG = """<!DOCTYPE html>
             border: 1px solid rgba(255, 255, 255, 0.12) !important;
             color: #ffffff !important;
             border-radius: 6px;
-            padding: 10px 14px;
-            font-size: 0.9rem;
+            padding: 9px 12px;
+            font-size: 0.88rem;
         }
         .form-control:focus, .form-select:focus {
             border-color: #0162e8 !important;
@@ -149,7 +168,25 @@ HTML_CONFIG = """<!DOCTYPE html>
             font-weight: 500;
             cursor: pointer;
         }
-        .nivel-box { background-color: #171f32; border: 1px solid var(--border-color); border-radius: 6px; padding: 10px; }
+        .nivel-box {
+            background-color: #171f32;
+            border: 1px solid var(--border-color);
+            border-radius: 6px;
+            padding: 10px;
+            height: 100%;
+        }
+        .multi-cols-box {
+            max-height: 145px;
+            overflow-y: auto;
+            background-color: #141b2d;
+            border: 1px solid rgba(255, 255, 255, 0.12);
+            border-radius: 6px;
+            padding: 6px 10px;
+        }
+        .form-check-input:checked {
+            background-color: #0162e8;
+            border-color: #00b9ff;
+        }
         .ruta-preview {
             background-color: #101624;
             border: 1px solid rgba(0, 185, 255, 0.25);
@@ -157,10 +194,11 @@ HTML_CONFIG = """<!DOCTYPE html>
             font-family: monospace;
             padding: 12px 16px;
             border-radius: 6px;
-            font-size: 0.86rem;
+            font-size: 0.85rem;
             display: flex;
-            align-items: center;
+            align-items: flex-start;
             gap: 10px;
+            word-break: break-word;
         }
         .btn-valex-primary {
             background: linear-gradient(to right, #0162e8 0%, #00b9ff 100%);
@@ -207,18 +245,17 @@ HTML_CONFIG = """<!DOCTYPE html>
 
     <nav class="valex-subnav">
         <span class="subnav-item active"><i class="bi bi-sliders"></i> Paso 1: Configurador USB</span>
-        <span class="subnav-item"><i class="bi bi-play-circle"></i> Paso 2: Ejecutar CongresoApp en los equipos</span>
+        <span class="subnav-item"><i class="bi bi-play-circle"></i> Paso 2: Ejecutar CongresoApp</span>
     </nav>
 
-    <div class="container-fluid px-4 pt-4" style="max-width: 1220px;">
+    <div class="container-fluid px-4 pt-4" style="max-width: 1280px;">
         <div class="mb-4">
             <h4 class="fw-bold mb-1">Configurador de Paquete USB</h4>
             <p class="mb-0" style="color: var(--text-muted); font-size: 0.88rem;">
-                Prepara los archivos maestros (<code>programa.xlsx</code> y <code>config_congreso.json</code>) que usará <strong>CongresoApp</strong> en cada ordenador
+                Nivel 3 por defecto con <strong>Hora inicio sesión</strong>, <strong>Hora final</strong>, <strong>Título de sesión</strong>, <strong>Sala</strong> y <strong>Día</strong> · Sanitizado y limitado a <strong>50 caracteres</strong>
             </p>
         </div>
 
-        <!-- 4 Tarjetas KPI -->
         <div class="row g-3 mb-4">
             <div class="col-sm-6 col-xl-3">
                 <div class="kpi-card kpi-blue">
@@ -238,9 +275,9 @@ HTML_CONFIG = """<!DOCTYPE html>
             </div>
             <div class="col-sm-6 col-xl-3">
                 <div class="kpi-card kpi-green">
-                    <div class="kpi-title">Niveles Carpeta PPT</div>
-                    <div class="kpi-value" id="kpiNiveles">4 Niveles</div>
-                    <div class="kpi-sub">Árbol de ponencias</div>
+                    <div class="kpi-title">Nivel 3 (Máx. 50 car.)</div>
+                    <div class="kpi-value" id="kpiNivel3Cols">5 Campos</div>
+                    <div class="kpi-sub" id="kpiNivel3Resumen">Hora inicio · Hora final · Sesión · Sala · Día</div>
                     <svg class="kpi-wave" viewBox="0 0 200 40" preserveAspectRatio="none"><path d="M0,32 L35,18 L75,26 L115,10 L155,20 L200,8 L200,40 L0,40 Z" fill="#ffffff"/></svg>
                 </div>
             </div>
@@ -257,7 +294,7 @@ HTML_CONFIG = """<!DOCTYPE html>
         {% if mensaje %}
             <div class="alert mb-4" style="background: rgba(2,150,102,0.2); border: 1px solid #48d6a8; color: #6ee7b7;">
                 <div class="fw-bold mb-1"><i class="bi bi-check-circle-fill me-2"></i>{{ mensaje }}</div>
-                <small>Ahora copia toda la carpeta <strong>PAQUETE_USB_CONGRESO</strong> a tu pendrive y abre <strong>CongresoApp</strong> desde ahí en cada ordenador.</small>
+                <small>Copia toda la carpeta <strong>PAQUETE_USB_CONGRESO</strong> al pendrive y abre <strong>CongresoApp</strong> en cada equipo.</small>
             </div>
         {% endif %}
         {% if error %}
@@ -273,7 +310,7 @@ HTML_CONFIG = """<!DOCTYPE html>
                         <div class="valex-card-header">
                             <div>
                                 <h5 class="valex-card-title">Parámetros del Congreso</h5>
-                                <div class="valex-card-subtitle">Configura las columnas del Excel y los equipos de red</div>
+                                <div class="valex-card-subtitle">Configura las columnas y el nombre sanitizado de sesión (máx. 50 caracteres)</div>
                             </div>
                             <i class="bi bi-sliders text-info fs-5"></i>
                         </div>
@@ -294,12 +331,13 @@ HTML_CONFIG = """<!DOCTYPE html>
                                 </div>
                             </div>
 
+                            <!-- 4. Jerarquía PPT con Nivel 3 multi-columna por defecto -->
                             <div class="mb-4">
                                 <label class="form-label">4. Orden de subcarpetas dentro de PPT</label>
-                                <div class="row g-2 mb-3">
+                                <div class="row g-3 mb-3">
                                     <div class="col-md-3">
                                         <div class="nivel-box">
-                                            <small class="d-block text-info fw-semibold mb-1" style="font-size:0.74rem;">NIVEL 1</small>
+                                            <small class="d-block text-info fw-semibold mb-1" style="font-size:0.74rem;">NIVEL 1 (Raíz)</small>
                                             <select name="nivel_1" id="nivel_1" class="form-select form-select-sm" onchange="actualizarVistaPrevia()">
                                                 <option value="Sala">Sala</option>
                                             </select>
@@ -314,25 +352,47 @@ HTML_CONFIG = """<!DOCTYPE html>
                                         </div>
                                     </div>
                                     <div class="col-md-3">
-                                        <div class="nivel-box">
-                                            <small class="d-block text-info fw-semibold mb-1" style="font-size:0.74rem;">NIVEL 3</small>
-                                            <select name="nivel_3" id="nivel_3" class="form-select form-select-sm" onchange="actualizarVistaPrevia()">
-                                                <option value="Titulo de sesion">Titulo de sesion</option>
-                                            </select>
+                                        <div class="nivel-box" style="border-color: rgba(0, 185, 255, 0.35);">
+                                            <small class="d-block text-info fw-semibold mb-1" style="font-size:0.74rem;">NIVEL 3 (Sesión · ≤50 car.)</small>
+                                            <div id="nivel3Checks" class="multi-cols-box mb-2">
+                                                <div class="form-check">
+                                                    <input class="form-check-input nivel3-chk" type="checkbox" name="nivel_3_cols" value="Hora inicio sesion" id="n3_def_1" checked onchange="actualizarVistaPrevia()">
+                                                    <label class="form-check-label small" for="n3_def_1">Hora inicio sesion</label>
+                                                </div>
+                                                <div class="form-check">
+                                                    <input class="form-check-input nivel3-chk" type="checkbox" name="nivel_3_cols" value="Hora final" id="n3_def_2" checked onchange="actualizarVistaPrevia()">
+                                                    <label class="form-check-label small" for="n3_def_2">Hora final</label>
+                                                </div>
+                                                <div class="form-check">
+                                                    <input class="form-check-input nivel3-chk" type="checkbox" name="nivel_3_cols" value="Titulo de sesion" id="n3_def_3" checked onchange="actualizarVistaPrevia()">
+                                                    <label class="form-check-label small" for="n3_def_3">Titulo de sesion</label>
+                                                </div>
+                                                <div class="form-check">
+                                                    <input class="form-check-input nivel3-chk" type="checkbox" name="nivel_3_cols" value="Sala" id="n3_def_4" checked onchange="actualizarVistaPrevia()">
+                                                    <label class="form-check-label small" for="n3_def_4">Sala</label>
+                                                </div>
+                                                <div class="form-check">
+                                                    <input class="form-check-input nivel3-chk" type="checkbox" name="nivel_3_cols" value="Dia" id="n3_def_5" checked onchange="actualizarVistaPrevia()">
+                                                    <label class="form-check-label small" for="n3_def_5">Dia</label>
+                                                </div>
+                                            </div>
+                                            <label class="small text-secondary d-block mb-1" style="font-size:0.7rem;">Separador:</label>
+                                            <input type="text" name="separador_nivel_3" id="separador_nivel_3" value=" - " class="form-control form-control-sm" oninput="actualizarVistaPrevia()">
                                         </div>
                                     </div>
                                     <div class="col-md-3">
                                         <div class="nivel-box">
-                                            <small class="d-block text-info fw-semibold mb-1" style="font-size:0.74rem;">NIVEL 4</small>
+                                            <small class="d-block text-info fw-semibold mb-1" style="font-size:0.74rem;">NIVEL 4 (Final)</small>
                                             <select name="nivel_4" id="nivel_4" class="form-select form-select-sm" onchange="actualizarVistaPrevia()">
                                                 <option value="Participantes">Participantes</option>
                                             </select>
                                         </div>
                                     </div>
                                 </div>
+
                                 <div class="ruta-preview" id="vistaPrevia">
-                                    <i class="bi bi-folder-fill text-warning"></i>
-                                    <span>PPT / Sala / Dia / Titulo de sesion / Participantes / archivo.pptx</span>
+                                    <i class="bi bi-folder-fill text-warning mt-1"></i>
+                                    <span>PPT / Sala / Dia / [Hora inicio sesion - Hora final - Titulo de sesion - Sala - Dia (≤50 car.)] / Participantes / archivo.pptx</span>
                                 </div>
                             </div>
 
@@ -348,44 +408,43 @@ HTML_CONFIG = """<!DOCTYPE html>
                     </div>
                 </div>
 
-                <!-- Columna Derecha: Flujo de uso + Salas -->
                 <div class="col-lg-4">
                     <div class="valex-card h-100">
                         <div class="valex-card-header">
                             <div>
-                                <h5 class="valex-card-title">¿Cómo usar los archivos?</h5>
-                                <div class="valex-card-subtitle">Guía rápida en 3 pasos</div>
+                                <h5 class="valex-card-title">Seguridad de Nombres</h5>
+                                <div class="valex-card-subtitle">Evita errores en rutas y presentaciones</div>
                             </div>
-                            <i class="bi bi-info-circle text-info fs-5"></i>
+                            <i class="bi bi-shield-check text-info fs-5"></i>
                         </div>
                         <div class="p-4 d-flex flex-column gap-3" style="font-size: 0.85rem;">
                             <div class="d-flex gap-3">
                                 <span class="step-badge">1</span>
                                 <div>
-                                    <strong class="text-white d-block">Genera el paquete</strong>
-                                    <span style="color: var(--text-muted);">Se creará <code>PAQUETE_USB_CONGRESO</code> con <code>programa.xlsx</code>, <code>config_congreso.json</code> y <code>CongresoApp</code>.</span>
+                                    <strong class="text-white d-block">Nivel 3 por defecto</strong>
+                                    <span style="color: var(--text-muted);">Preselecciona <em>Hora inicio sesión</em>, <em>Hora final</em>, <em>Título de sesión</em>, <em>Sala</em> y <em>Día</em>.</span>
                                 </div>
                             </div>
                             <div class="d-flex gap-3">
                                 <span class="step-badge">2</span>
                                 <div>
-                                    <strong class="text-white d-block">Copia al Pendrive USB</strong>
-                                    <span style="color: var(--text-muted);">Mete toda esa carpeta en tu USB y llévalo a cada ordenador del congreso (ADM1, Sala 1, Sala 2...).</span>
+                                    <strong class="text-white d-block">Sanitización automática</strong>
+                                    <span style="color: var(--text-muted);">Limpia caracteres especiales no válidos (<code>\ / : * ? " &lt; &gt; |</code>) en todos los nombres de carpeta.</span>
                                 </div>
                             </div>
                             <div class="d-flex gap-3">
                                 <span class="step-badge">3</span>
                                 <div>
-                                    <strong class="text-white d-block">Abre CongresoApp en cada PC</strong>
-                                    <span style="color: var(--text-muted);">CongresoApp leerá automáticamente el Excel y el JSON para crear las carpetas PPT, configurar la red y gestionar las presentaciones.</span>
+                                    <strong class="text-white d-block">Límite de 50 caracteres</strong>
+                                    <span style="color: var(--text-muted);">Trunca el nombre de sesión (Nivel 3) a un máximo de <strong>50 caracteres</strong> para evitar problemas al colocar presentaciones dentro.</span>
                                 </div>
                             </div>
 
-                            <hr style="border-color: var(--border-color); my-1">
+                            <hr style="border-color: var(--border-color);">
 
                             <div>
                                 <small class="text-uppercase fw-bold d-block mb-2" style="color: var(--text-muted); font-size: 0.72rem;">
-                                    Salas detectadas en tu Excel
+                                    Salas detectadas en el Excel
                                 </small>
                                 <div id="listaSalasPreview" class="d-flex flex-wrap gap-2">
                                     <span style="color: var(--text-muted); font-size: 0.82rem;">Sube el Excel para verlas aquí.</span>
@@ -399,19 +458,34 @@ HTML_CONFIG = """<!DOCTYPE html>
     </div>
 
 <script>
+const DEFECTO_N3 = [
+    ['hora inicio sesion', 'hora inicio', 'inicio sesion', 'hora de inicio'],
+    ['hora final', 'hora fin', 'fin sesion', 'hora de fin'],
+    ['titulo de sesion', 'titulo sesion', 'sesion', 'titulo'],
+    ['sala'],
+    ['dia', 'fecha']
+];
+
 function normalizar(texto) {
-    return texto.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim();
+    return String(texto || '').toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/\s+/g, " ").trim();
 }
+
+function coincideConLista(colNorm, patrones) {
+    return patrones.some(p => colNorm === p || colNorm.includes(p));
+}
+
 function actualizarKPIs() {
     const admins = document.getElementById('inputAdmins').value || 2;
     const wg = (document.getElementById('inputWorkgroup').value || 'CONGRESO').toUpperCase();
     document.getElementById('kpiAdmins').textContent = admins + (admins == 1 ? ' Equipo' : ' Equipos');
     document.getElementById('kpiWorkgroup').textContent = 'Grupo: ' + wg;
 }
+
 function leerColumnasExcel(input) {
     if (!input.files || !input.files[0]) return;
     const file = input.files[0];
     document.getElementById('kpiArchivo').textContent = file.name.length > 16 ? file.name.substring(0, 14) + '...' : file.name;
+
     const reader = new FileReader();
     reader.onload = function(e) {
         const data = new Uint8Array(e.target.result);
@@ -421,6 +495,7 @@ function leerColumnasExcel(input) {
             document.getElementById('kpiFilas').textContent = (rows.length - 1) + ' ponencias/filas';
             const headers = rows[0].filter(h => h !== undefined && h !== null && String(h).trim() !== '').map(h => String(h).trim());
             rellenarDesplegables(headers);
+
             const idxSala = headers.findIndex(h => normalizar(h) === 'sala');
             const contenedorSalas = document.getElementById('listaSalasPreview');
             if (idxSala !== -1) {
@@ -438,13 +513,14 @@ function leerColumnasExcel(input) {
     };
     reader.readAsArrayBuffer(file);
 }
+
 function rellenarDesplegables(columnas) {
     const selectores = [
         { id: 'nivel_1', claves: ['sala'] },
         { id: 'nivel_2', claves: ['dia', 'fecha'] },
-        { id: 'nivel_3', claves: ['titulo de sesion', 'sesion', 'titulo sesion'] },
         { id: 'nivel_4', claves: ['participantes', 'ponente', 'ponentes', 'autor'] }
     ];
+
     selectores.forEach(sel => {
         const el = document.getElementById(sel.id);
         el.innerHTML = '<option value="">-- Ninguno (Omitir) --</option>';
@@ -454,22 +530,63 @@ function rellenarDesplegables(columnas) {
             opt.value = col;
             opt.textContent = col;
             const colNorm = normalizar(col);
-            if (!seleccionada && sel.claves.some(k => colNorm === k || colNorm.includes(k))) {
+            if (!seleccionada && coincideConLista(colNorm, sel.claves)) {
                 opt.selected = true;
                 seleccionada = true;
             }
             el.appendChild(opt);
         });
     });
+
+    // Marcar por defecto en Nivel 3: Hora inicio sesion, Hora final, Titulo de sesion, Sala, Dia
+    const n3Container = document.getElementById('nivel3Checks');
+    let marcadaAlguna = false;
+    n3Container.innerHTML = columnas.map((col, idx) => {
+        const colNorm = normalizar(col);
+        const esPorDefecto = DEFECTO_N3.some(grupo => coincideConLista(colNorm, grupo));
+        if (esPorDefecto) marcadaAlguna = true;
+        return `
+            <div class="form-check">
+                <input class="form-check-input nivel3-chk" type="checkbox" name="nivel_3_cols" value="${col.replace(/"/g, '&quot;')}" id="n3_${idx}" ${esPorDefecto ? 'checked' : ''} onchange="actualizarVistaPrevia()">
+                <label class="form-check-label small" for="n3_${idx}">${col}</label>
+            </div>
+        `;
+    }).join('');
+
+    if (!marcadaAlguna && n3Container.querySelector('.nivel3-chk')) {
+        n3Container.querySelector('.nivel3-chk').checked = true;
+    }
+
     actualizarVistaPrevia();
 }
+
+function obtenerNivel3Seleccionado() {
+    const cols = Array.from(document.querySelectorAll('.nivel3-chk:checked')).map(chk => chk.value);
+    const sep = document.getElementById('separador_nivel_3').value;
+    let texto = cols.join(sep);
+    if (texto.length > 50) {
+        texto = texto.substring(0, 50) + '…';
+    }
+    return { cols, sep, texto };
+}
+
 function actualizarVistaPrevia() {
-    const niveles = ['nivel_1', 'nivel_2', 'nivel_3', 'nivel_4']
-        .map(id => document.getElementById(id).value)
-        .filter(val => val !== '');
-    document.getElementById('kpiNiveles').textContent = niveles.length + (niveles.length === 1 ? ' Nivel' : ' Niveles');
-    const ruta = niveles.length > 0 ? 'PPT / ' + niveles.join(' / ') + ' / archivo.pptx' : 'PPT / archivo.pptx';
-    document.getElementById('vistaPrevia').innerHTML = `<i class="bi bi-folder-fill text-warning"></i><span>${ruta}</span>`;
+    const n1 = document.getElementById('nivel_1').value;
+    const n2 = document.getElementById('nivel_2').value;
+    const n3 = obtenerNivel3Seleccionado();
+    const n4 = document.getElementById('nivel_4').value;
+
+    document.getElementById('kpiNivel3Cols').textContent = n3.cols.length + (n3.cols.length === 1 ? ' Campo' : ' Campos');
+    document.getElementById('kpiNivel3Resumen').textContent = n3.cols.length > 0 ? n3.cols.join(' · ') : 'Omitido';
+
+    const partes = ['PPT'];
+    if (n1) partes.push(n1);
+    if (n2) partes.push(n2);
+    if (n3.cols.length > 0) partes.push(`[${n3.texto} · ≤50 car.]`);
+    if (n4) partes.push(n4);
+    partes.push('archivo.pptx');
+
+    document.getElementById('vistaPrevia').innerHTML = `<i class="bi bi-folder-fill text-warning mt-1"></i><span>${partes.join(' / ')}</span>`;
 }
 </script>
 </body>
@@ -499,30 +616,37 @@ def index():
 
                 col_sala = next((c for c in df.columns if str(c).strip().lower() == 'sala'), None)
                 if col_sala:
-                    salas = sorted(list(set(str(s).strip() for s in df[col_sala].dropna() if str(s).strip())))
+                    salas = sorted(list(set(sanitizar_nombre_carpeta(s) for s in df[col_sala].dropna() if str(s).strip())))
                     equipos.extend(salas)
 
-                extras = [l.strip() for l in request.form.get('equipos_extra', '').splitlines() if l.strip()]
+                extras = [sanitizar_nombre_carpeta(l) for l in request.form.get('equipos_extra', '').splitlines() if l.strip()]
                 for ex in extras:
                     if ex not in equipos:
                         equipos.append(ex)
 
+                n1 = request.form.get('nivel_1', '').strip()
+                n2 = request.form.get('nivel_2', '').strip()
+                n3_cols = [c.strip() for c in request.form.getlist('nivel_3_cols') if c.strip()]
+                sep_n3 = request.form.get('separador_nivel_3', ' - ')
+                n4 = request.form.get('nivel_4', '').strip()
+
                 orden_carpetas = []
-                for n in ['nivel_1', 'nivel_2', 'nivel_3', 'nivel_4']:
-                    val = request.form.get(n, '').strip()
-                    if val and val not in orden_carpetas:
-                        orden_carpetas.append(val)
+                for item in [n1, n2, n3_cols if n3_cols else "", n4]:
+                    if item and item not in orden_carpetas:
+                        orden_carpetas.append(item)
 
                 config_data = {
-                    "workgroup": request.form.get('workgroup', 'CONGRESO').strip().upper(),
+                    "workgroup": sanitizar_nombre_carpeta(request.form.get('workgroup', 'CONGRESO').strip().upper(), max_len=15),
                     "orden_carpetas": orden_carpetas,
+                    "nivel_3_columnas": n3_cols,
+                    "separador_nivel_3": sep_n3,
+                    "max_chars_nivel_3": 50,
                     "equipos": equipos
                 }
 
                 with open(os.path.join(salida, "config_congreso.json"), "w", encoding="utf-8") as f:
                     json.dump(config_data, f, indent=4, ensure_ascii=False)
 
-                # Copiar CongresoApp (.exe, .app o .py) si está en la misma carpeta
                 rutas_busqueda = [base, os.path.dirname(os.path.abspath(sys.executable))]
                 if SISTEMA == 'Darwin':
                     rutas_busqueda.append(os.path.abspath(os.path.join(os.path.dirname(sys.executable), '..', '..', '..')))

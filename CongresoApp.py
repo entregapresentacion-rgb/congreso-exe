@@ -4,6 +4,7 @@ import json
 import time
 import ctypes
 import socket
+import platform
 import threading
 import subprocess
 import webbrowser
@@ -13,21 +14,29 @@ from datetime import datetime
 from flask import Flask, render_template_string, request, send_from_directory, redirect, flash, jsonify
 from werkzeug.utils import secure_filename
 
+SISTEMA = platform.system()  # 'Windows' o 'Darwin' (macOS)
+
 def es_admin():
-    try:
-        return ctypes.windll.shell32.IsUserAnAdmin()
-    except Exception:
-        return False
+    if SISTEMA == 'Windows':
+        try:
+            return ctypes.windll.shell32.IsUserAnAdmin()
+        except Exception:
+            return False
+    else:
+        return os.geteuid() == 0
 
 def obtener_ruta_base():
     if getattr(sys, 'frozen', False):
-        return os.path.dirname(sys.executable)
+        ruta = os.path.dirname(sys.executable)
+        if SISTEMA == 'Darwin' and ruta.endswith('Contents/MacOS'):
+            return os.path.abspath(os.path.join(ruta, '..', '..', '..'))
+        return ruta
     return os.path.abspath(os.path.dirname(__file__))
 
 BASE_DIR = obtener_ruta_base()
 CONFIG_FILE = os.path.join(BASE_DIR, 'config_congreso.json')
 EXCEL_FILE = os.path.join(BASE_DIR, 'programa.xlsx')
-CARPETA_PPT = r"C:\PPT"
+CARPETA_PPT = r"C:\PPT" if SISTEMA == 'Windows' else "/Users/Shared/PPT"
 
 def cargar_config():
     if os.path.exists(CONFIG_FILE):
@@ -37,35 +46,60 @@ def cargar_config():
 
 CONFIG = cargar_config()
 
-def configurar_entorno_windows(nombre_equipo):
+def configurar_entorno_sistema(nombre_equipo):
     workgroup = CONFIG.get("workgroup", "CONGRESO")
     os.makedirs(CARPETA_PPT, exist_ok=True)
-    
-    escritorio = os.path.join(os.path.expanduser("~"), "Desktop")
-    ruta_lnk = os.path.join(escritorio, "PPT.lnk")
-    ps_shortcut = f"""
-    $WshShell = New-Object -comObject WScript.Shell
-    $Shortcut = $WshShell.CreateShortcut('{ruta_lnk}')
-    $Shortcut.TargetPath = '{CARPETA_PPT}'
-    $Shortcut.Save()
-    """
-    subprocess.run(["powershell", "-NoProfile", "-Command", ps_shortcut], creationflags=0x08000000)
+    pc_actual = socket.gethostname().split('.')[0].upper()
 
-    subprocess.run('net share PPT="C:\\PPT" /GRANT:Everyone,FULL', shell=True, creationflags=0x08000000)
-    subprocess.run('icacls "C:\\PPT" /grant Everyone:(OI)(CI)F /T', shell=True, creationflags=0x08000000)
+    if SISTEMA == 'Windows':
+        escritorio = os.path.join(os.path.expanduser("~"), "Desktop")
+        ruta_lnk = os.path.join(escritorio, "PPT.lnk")
+        ps_shortcut = f"""
+        $WshShell = New-Object -comObject WScript.Shell
+        $Shortcut = $WshShell.CreateShortcut('{ruta_lnk}')
+        $Shortcut.TargetPath = '{CARPETA_PPT}'
+        $Shortcut.Save()
+        """
+        subprocess.run(["powershell", "-NoProfile", "-Command", ps_shortcut], creationflags=0x08000000)
+        subprocess.run('net share PPT="C:\\PPT" /GRANT:Everyone,FULL', shell=True, creationflags=0x08000000)
+        subprocess.run('icacls "C:\\PPT" /grant Everyone:(OI)(CI)F /T', shell=True, creationflags=0x08000000)
 
-    pc_actual = socket.gethostname().upper()
-    ps_net = f"""
-    $cs = Get-WmiObject Win32_ComputerSystem
-    if ($cs.Workgroup -ne '{workgroup}') {{
-        $cs.JoinDomainOrWorkgroup('{workgroup}') | Out-Null
-    }}
-    if ($env:COMPUTERNAME -ne '{nombre_equipo.upper()}') {{
-        Rename-Computer -NewName '{nombre_equipo.upper()}' -Force -ErrorAction SilentlyContinue
-    }}
-    """
-    subprocess.run(["powershell", "-NoProfile", "-Command", ps_net], creationflags=0x08000000)
-    return pc_actual != nombre_equipo.upper()
+        ps_net = f"""
+        $cs = Get-WmiObject Win32_ComputerSystem
+        if ($cs.Workgroup -ne '{workgroup}') {{
+            $cs.JoinDomainOrWorkgroup('{workgroup}') | Out-Null
+        }}
+        if ($env:COMPUTERNAME -ne '{nombre_equipo.upper()}') {{
+            Rename-Computer -NewName '{nombre_equipo.upper()}' -Force -ErrorAction SilentlyContinue
+        }}
+        """
+        subprocess.run(["powershell", "-NoProfile", "-Command", ps_net], creationflags=0x08000000)
+        return pc_actual != nombre_equipo.upper()
+
+    elif SISTEMA == 'Darwin':
+        os.chmod(CARPETA_PPT, 0o777)
+        usuario_real = os.environ.get('SUDO_USER') or os.environ.get('USER')
+        escritorio_mac = os.path.expanduser(f"~{usuario_real}/Desktop")
+        enlace_mac = os.path.join(escritorio_mac, "PPT")
+        if not os.path.exists(enlace_mac):
+            try:
+                os.symlink(CARPETA_PPT, enlace_mac)
+            except OSError:
+                pass
+
+        subprocess.run(["sharing", "-a", CARPETA_PPT, "-S", "PPT"], stderr=subprocess.DEVNULL)
+
+        nombre_limpio = nombre_equipo.replace('_', '-').replace(' ', '-')
+        if pc_actual != nombre_equipo.upper():
+            subprocess.run(["scutil", "--set", "ComputerName", nombre_equipo.upper()])
+            subprocess.run(["scutil", "--set", "LocalHostName", nombre_limpio])
+            subprocess.run(["scutil", "--set", "HostName", nombre_limpio])
+            subprocess.run([
+                "defaults", "write", "/Library/Preferences/SystemConfiguration/com.apple.smb.server",
+                "Workgroup", workgroup
+            ])
+            return True
+        return False
 
 def limpiar_nombre_carpeta(texto):
     invalids = '<>:"/\\|?*'
@@ -77,31 +111,79 @@ def construir_ruta_destino(fila_ponencia):
     subrutas = [limpiar_nombre_carpeta(fila_ponencia.get(col, "General")) for col in orden if col in fila_ponencia]
     ruta_final = os.path.join(CARPETA_PPT, *subrutas)
     os.makedirs(ruta_final, exist_ok=True)
+    if SISTEMA == 'Darwin':
+        try:
+            os.chmod(ruta_final, 0o777)
+        except OSError:
+            pass
     return ruta_final
 
 def abrir_pantalla_completa(ruta_archivo):
     if not os.path.exists(ruta_archivo):
         return False
     ext = os.path.splitext(ruta_archivo)[1].lower()
-    try:
-        if ext in ['.ppt', '.pptx', '.pps', '.ppsx']:
-            ps_ppt = f"""
-            try {{
-                $ppt = New-Object -ComObject PowerPoint.Application
-                $ppt.Visible = [Microsoft.Office.Core.MsoTriState]::msoTrue
-                $pres = $ppt.Presentations.Open('{ruta_archivo}', $true, $false, $true)
-                $pres.SlideShowSettings.Run() | Out-Null
-            }} catch {{
-                Start-Process '{ruta_archivo}'
-            }}
-            """
-            subprocess.Popen(["powershell", "-NoProfile", "-Command", ps_ppt], creationflags=0x08000000)
-        else:
+    
+    if SISTEMA == 'Windows':
+        try:
+            if ext in ['.ppt', '.pptx', '.pps', '.ppsx']:
+                ps_ppt = f"""
+                try {{
+                    $ppt = New-Object -ComObject PowerPoint.Application
+                    $ppt.Visible = [Microsoft.Office.Core.MsoTriState]::msoTrue
+                    $pres = $ppt.Presentations.Open('{ruta_archivo}', $true, $false, $true)
+                    $pres.SlideShowSettings.Run() | Out-Null
+                }} catch {{
+                    Start-Process '{ruta_archivo}'
+                }}
+                """
+                subprocess.Popen(["powershell", "-NoProfile", "-Command", ps_ppt], creationflags=0x08000000)
+            else:
+                os.startfile(ruta_archivo)
+            return True
+        except Exception:
             os.startfile(ruta_archivo)
-        return True
-    except Exception:
-        os.startfile(ruta_archivo)
-        return True
+            return True
+
+    elif SISTEMA == 'Darwin':
+        try:
+            if ext in ['.ppt', '.pptx', '.pps', '.ppsx']:
+                script_mac = f'''
+                tell application "Microsoft PowerPoint"
+                    activate
+                    open POSIX file "{ruta_archivo}"
+                    delay 1
+                    run slide show slide show settings of active presentation
+                end tell
+                '''
+                res = subprocess.run(["osascript", "-e", script_mac], stderr=subprocess.DEVNULL)
+                if res.returncode != 0:
+                    subprocess.Popen(["open", ruta_archivo])
+            elif ext == '.key':
+                script_key = f'''
+                tell application "Keynote"
+                    activate
+                    open POSIX file "{ruta_archivo}"
+                    delay 1
+                    start the front document
+                end tell
+                '''
+                subprocess.run(["osascript", "-e", script_key], stderr=subprocess.DEVNULL)
+            elif ext == '.pdf':
+                script_pdf = f'''
+                tell application "Preview"
+                    activate
+                    open POSIX file "{ruta_archivo}"
+                    delay 0.8
+                    tell application "System Events" to keystroke "f" using {{command down, control down}}
+                end tell
+                '''
+                subprocess.run(["osascript", "-e", script_pdf], stderr=subprocess.DEVNULL)
+            else:
+                subprocess.Popen(["open", ruta_archivo])
+            return True
+        except Exception:
+            subprocess.Popen(["open", ruta_archivo])
+            return True
 
 app = Flask(__name__)
 app.secret_key = 'congreso_unificado_key'
@@ -120,7 +202,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
     <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.1/font/bootstrap-icons.css" rel="stylesheet">
     <style>
-        body { background-color: #f0f2f5; font-family: 'Segoe UI', system-ui, sans-serif; }
+        body { background-color: #f0f2f5; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; }
         .session-card { border: none; border-radius: 12px; margin-bottom: 12px; overflow: hidden; box-shadow: 0 2px 6px rgba(0,0,0,0.06); }
         .session-header { background: #ffffff; padding: 16px 22px; cursor: pointer; transition: background 0.2s; border-left: 5px solid #0d6efd; }
         .session-header:hover { background: #f8faff; }
@@ -142,7 +224,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
             <span class="badge bg-secondary fw-normal">Grupo: {{ workgroup }}</span>
         </span>
         <div class="d-flex align-items-center gap-3">
-            <span class="text-light small"><i class="bi bi-folder-check text-warning"></i> Carpeta Local: <strong>C:\\PPT</strong></span>
+            <span class="text-light small"><i class="bi bi-folder-check text-warning"></i> Carpeta Local: <strong>{{ ruta_ppt }}</strong></span>
             <button onclick="location.reload()" class="btn btn-outline-light btn-sm rounded-pill px-3"><i class="bi bi-arrow-clockwise"></i> Actualizar</button>
         </div>
     </div>
@@ -319,6 +401,16 @@ def buscar_archivo_en_ppt(ponencia_id):
         return encontrados[0]
     return None
 
+def obtener_servidor_url():
+    for host in ["http://ADM1:5000", "http://ADM1.local:5000"]:
+        try:
+            r = requests.get(f"{host}/api/ping", timeout=1.5)
+            if r.status_code == 200:
+                return host
+        except Exception:
+            pass
+    return "http://ADM1:5000"
+
 def obtener_datos_completos():
     registros = []
     if ES_SERVIDOR_CENTRAL:
@@ -326,8 +418,9 @@ def obtener_datos_completos():
             df = pd.read_excel(EXCEL_FILE, engine='openpyxl').fillna('')
             registros = df.to_dict(orient='records')
     else:
+        url_srv = obtener_servidor_url()
         try:
-            r = requests.get("http://ADM1:5000/api/raw_excel", timeout=3)
+            r = requests.get(f"{url_srv}/api/raw_excel", timeout=3)
             if r.status_code == 200:
                 registros = r.json()
                 pd.DataFrame(registros).to_excel(EXCEL_FILE, index=False)
@@ -348,8 +441,9 @@ def obtener_datos_completos():
 def sincronizador_segundo_plano():
     while True:
         if not ES_SERVIDOR_CENTRAL:
+            url_srv = obtener_servidor_url()
             try:
-                r = requests.get("http://ADM1:5000/api/raw_excel", timeout=5)
+                r = requests.get(f"{url_srv}/api/raw_excel", timeout=5)
                 if r.status_code == 200:
                     datos = r.json()
                     es_admin = EQUIPO_ACTUAL.upper().startswith("ADM")
@@ -362,7 +456,7 @@ def sincronizador_segundo_plano():
                             carpeta_dest = construir_ruta_destino(p)
                             ruta_dest = os.path.join(carpeta_dest, arch_remoto)
                             if not os.path.exists(ruta_dest):
-                                with requests.get(f"http://ADM1:5000/descargar_id/{id_p}", stream=True, timeout=30) as rf:
+                                with requests.get(f"{url_srv}/descargar_id/{id_p}", stream=True, timeout=30) as rf:
                                     if rf.status_code == 200:
                                         with open(ruta_dest, "wb") as f:
                                             for chunk in rf.iter_content(8192):
@@ -375,6 +469,10 @@ def sincronizador_segundo_plano():
             except Exception:
                 pass
         time.sleep(6)
+
+@app.route('/api/ping')
+def api_ping():
+    return jsonify({"status": "ok", "equipo": EQUIPO_ACTUAL})
 
 @app.route('/')
 def index():
@@ -415,6 +513,7 @@ def index():
         DASHBOARD_HTML,
         equipo=EQUIPO_ACTUAL,
         workgroup=CONFIG.get("workgroup", "CONGRESO"),
+        ruta_ppt=CARPETA_PPT,
         es_admin=es_admin,
         sesiones=sesiones_lista,
         salas_disponibles=salas_disponibles,
@@ -456,11 +555,12 @@ def subir_presentacion(ponencia_id):
                 hora_l = str(ponencia.get('Hora', '')).replace(':', '-')
                 nombre = secure_filename(f"ID_{ponencia_id}_{hora_l}_{ponencia.get('Ponente','')}_v{ts}") + f".{ext}"
                 file.save(os.path.join(carpeta_dest, nombre))
-                flash(f'✔ Presentación guardada en C:\\PPT para {ponencia.get("Ponente")}', 'success')
+                flash(f'✔ Presentación guardada en {CARPETA_PPT} para {ponencia.get("Ponente")}', 'success')
     else:
+        url_srv = obtener_servidor_url()
         try:
             files = {'archivo': (file.filename, file.stream, file.mimetype)}
-            r = requests.post(f"http://ADM1:5000/subir/{ponencia_id}", files=files, timeout=30)
+            r = requests.post(f"{url_srv}/subir/{ponencia_id}", files=files, timeout=30)
             if r.status_code == 200:
                 flash('✔ Enviado al servidor central ADM1 y replicado.', 'success')
         except Exception:
@@ -489,12 +589,12 @@ def selector_inicio():
     root.configure(bg="#111827")
     root.eval('tk::PlaceWindow . center')
 
-    tk.Label(root, text="CONFIGURACIÓN DE PUESTO", font=("Segoe UI", 14, "bold"), bg="#111827", fg="white", pady=15).pack()
-    tk.Label(root, text=f"Grupo de Trabajo: {CONFIG.get('workgroup', 'CONGRESO')}", font=("Segoe UI", 10), bg="#111827", fg="#10b981").pack()
-    tk.Label(root, text="Selecciona el nombre asignado a este ordenador:", font=("Segoe UI", 10), bg="#111827", fg="#d1d5db", pady=10).pack()
+    tk.Label(root, text="CONFIGURACIÓN DE PUESTO", font=("Helvetica", 14, "bold"), bg="#111827", fg="white", pady=15).pack()
+    tk.Label(root, text=f"Grupo de Trabajo: {CONFIG.get('workgroup', 'CONGRESO')}", font=("Helvetica", 10), bg="#111827", fg="#10b981").pack()
+    tk.Label(root, text="Selecciona el nombre asignado a este ordenador:", font=("Helvetica", 10), bg="#111827", fg="#d1d5db", pady=10).pack()
 
     equipos = CONFIG.get("equipos", ["ADM1"])
-    listbox = tk.Listbox(root, font=("Segoe UI", 11, "bold"), height=7, bg="#1f2937", fg="white", selectbackground="#2563eb", borderwidth=0)
+    listbox = tk.Listbox(root, font=("Helvetica", 11, "bold"), height=7, bg="#1f2937", fg="white", selectbackground="#2563eb", borderwidth=0)
     for eq in equipos:
         listbox.insert(tk.END, eq)
     listbox.select_set(0)
@@ -507,23 +607,28 @@ def selector_inicio():
             return
         EQUIPO_ACTUAL = listbox.get(idx[0])
         ES_SERVIDOR_CENTRAL = (EQUIPO_ACTUAL.upper() == "ADM1")
-        reinicio_necesario = configurar_entorno_windows(EQUIPO_ACTUAL)
+        reinicio_necesario = configurar_entorno_sistema(EQUIPO_ACTUAL)
         if reinicio_necesario:
             messagebox.showinfo(
                 "Cambio de Nombre de Equipo",
                 f"Este equipo se ha configurado como '{EQUIPO_ACTUAL}' en el grupo '{CONFIG.get('workgroup')}'.\n\n"
-                "Se ha creado la carpeta compartida C:\\PPT y su acceso directo en el Escritorio.\n"
-                "Nota: Para que Windows aplique el nuevo nombre en red, reinicia el PC cuando puedas."
+                f"Se ha creado la carpeta compartida {CARPETA_PPT} y su acceso directo en el Escritorio.\n"
+                "Nota: Si es la primera vez que cambias el nombre de red, reinicia el equipo."
             )
         root.destroy()
 
-    tk.Button(root, text="INICIAR SISTEMA EN ESTE EQUIPO", command=confirmar, bg="#10b981", fg="white", font=("Segoe UI", 10, "bold"), pady=8).pack(fill="x", padx=40, pady=15)
+    tk.Button(root, text="INICIAR SISTEMA EN ESTE EQUIPO", command=confirmar, bg="#10b981", fg="white", font=("Helvetica", 10, "bold"), pady=8).pack(fill="x", padx=40, pady=15)
     root.mainloop()
 
 if __name__ == '__main__':
     if not es_admin():
-        ctypes.windll.shell32.ShellExecuteW(None, "runas", sys.executable, " ".join(sys.argv), None, 1)
-        sys.exit()
+        if SISTEMA == 'Windows':
+            ctypes.windll.shell32.ShellExecuteW(None, "runas", sys.executable, " ".join(sys.argv), None, 1)
+            sys.exit()
+        elif SISTEMA == 'Darwin':
+            cmd_mac = f'do shell script "\\"{sys.executable}\\"" with administrator privileges'
+            subprocess.Popen(["osascript", "-e", cmd_mac])
+            sys.exit()
 
     selector_inicio()
     threading.Thread(target=sincronizador_segundo_plano, daemon=True).start()

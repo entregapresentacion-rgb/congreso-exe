@@ -14,7 +14,7 @@ from datetime import datetime
 from flask import Flask, render_template_string, request, send_from_directory, redirect, flash, jsonify
 from werkzeug.utils import secure_filename
 
-SISTEMA = platform.system()  # 'Windows' o 'Darwin' (macOS)
+SISTEMA = platform.system()
 
 def es_admin():
     if SISTEMA == 'Windows':
@@ -45,6 +45,8 @@ def cargar_config():
     return {"workgroup": "CONGRESO", "orden_carpetas": ["Sala", "Sesion"], "equipos": ["ADM1"]}
 
 CONFIG = cargar_config()
+EQUIPO_ACTUAL = None
+ES_SERVIDOR_CENTRAL = False
 
 def configurar_entorno_sistema(nombre_equipo):
     workgroup = CONFIG.get("workgroup", "CONGRESO")
@@ -122,7 +124,6 @@ def abrir_pantalla_completa(ruta_archivo):
     if not os.path.exists(ruta_archivo):
         return False
     ext = os.path.splitext(ruta_archivo)[1].lower()
-    
     if SISTEMA == 'Windows':
         try:
             if ext in ['.ppt', '.pptx', '.pps', '.ppsx']:
@@ -143,7 +144,6 @@ def abrir_pantalla_completa(ruta_archivo):
         except Exception:
             os.startfile(ruta_archivo)
             return True
-
     elif SISTEMA == 'Darwin':
         try:
             if ext in ['.ppt', '.pptx', '.pps', '.ppsx']:
@@ -190,8 +190,33 @@ app.secret_key = 'congreso_unificado_key'
 lock_archivos = threading.Lock()
 ALLOWED_EXTENSIONS = {'pptx', 'ppt', 'pdf', 'key', 'mp4', 'zip', 'mov', 'avi'}
 
-EQUIPO_ACTUAL = "ADM1"
-ES_SERVIDOR_CENTRAL = True
+SELECTOR_HTML = """<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <title>Inicializar Puesto - Congreso</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+</head>
+<body class="bg-dark d-flex align-items-center justify-content-center" style="min-height: 100vh;">
+<div class="card shadow-lg border-0 rounded-4 p-4" style="max-width: 460px; width: 100%;">
+    <div class="text-center mb-3">
+        <h4 class="fw-bold mb-1">🖥 Configuración de Puesto</h4>
+        <span class="badge bg-success">Grupo de Trabajo: {{ workgroup }}</span>
+    </div>
+    <p class="text-muted text-center small">Selecciona el nombre asignado a este ordenador. El sistema configurará la red y la carpeta <strong>PPT</strong> automáticamente.</p>
+    <form method="POST" action="/seleccionar_equipo">
+        <div class="mb-3">
+            <select name="equipo" class="form-select form-select-lg fw-bold" required>
+                {% for eq in equipos %}
+                    <option value="{{ eq }}">{{ eq }}</option>
+                {% endfor %}
+            </select>
+        </div>
+        <button type="submit" class="btn btn-primary btn-lg w-100 fw-bold">INICIAR SISTEMA EN ESTE EQUIPO</button>
+    </form>
+</div>
+</body>
+</html>"""
 
 DASHBOARD_HTML = """<!DOCTYPE html>
 <html lang="es">
@@ -440,7 +465,7 @@ def obtener_datos_completos():
 
 def sincronizador_segundo_plano():
     while True:
-        if not ES_SERVIDOR_CENTRAL:
+        if EQUIPO_ACTUAL and not ES_SERVIDOR_CENTRAL:
             url_srv = obtener_servidor_url()
             try:
                 r = requests.get(f"{url_srv}/api/raw_excel", timeout=5)
@@ -474,8 +499,23 @@ def sincronizador_segundo_plano():
 def api_ping():
     return jsonify({"status": "ok", "equipo": EQUIPO_ACTUAL})
 
+@app.route('/seleccionar_equipo', methods=['POST'])
+def seleccionar_equipo():
+    global EQUIPO_ACTUAL, ES_SERVIDOR_CENTRAL
+    eq = request.form.get('equipo')
+    if eq:
+        EQUIPO_ACTUAL = eq
+        ES_SERVIDOR_CENTRAL = (EQUIPO_ACTUAL.upper() == "ADM1")
+        reinicio = configurar_entorno_sistema(EQUIPO_ACTUAL)
+        if reinicio:
+            flash(f"Equipo renombrado a '{EQUIPO_ACTUAL}' en grupo '{CONFIG.get('workgroup')}'. Reinicia el equipo si es la primera vez para aplicar el nombre en red.", "warning")
+    return redirect('/')
+
 @app.route('/')
 def index():
+    if not EQUIPO_ACTUAL:
+        return render_template_string(SELECTOR_HTML, workgroup=CONFIG.get("workgroup", "CONGRESO"), equipos=CONFIG.get("equipos", ["ADM1"]))
+
     es_admin = EQUIPO_ACTUAL.upper().startswith("ADM")
     sala_filtro = request.args.get('sala', '') if es_admin else EQUIPO_ACTUAL.replace('_', ' ')
     busqueda = request.args.get('q', '').lower().strip()
@@ -579,47 +619,6 @@ def descargar_id(ponencia_id):
         return send_from_directory(os.path.dirname(ruta), os.path.basename(ruta), as_attachment=True)
     return "No encontrado", 404
 
-def selector_inicio():
-    import tkinter as tk
-    from tkinter import messagebox
-
-    root = tk.Tk()
-    root.title("Inicializar Puesto - Congreso")
-    root.geometry("440x360")
-    root.configure(bg="#111827")
-    root.eval('tk::PlaceWindow . center')
-
-    tk.Label(root, text="CONFIGURACIÓN DE PUESTO", font=("Helvetica", 14, "bold"), bg="#111827", fg="white", pady=15).pack()
-    tk.Label(root, text=f"Grupo de Trabajo: {CONFIG.get('workgroup', 'CONGRESO')}", font=("Helvetica", 10), bg="#111827", fg="#10b981").pack()
-    tk.Label(root, text="Selecciona el nombre asignado a este ordenador:", font=("Helvetica", 10), bg="#111827", fg="#d1d5db", pady=10).pack()
-
-    equipos = CONFIG.get("equipos", ["ADM1"])
-    listbox = tk.Listbox(root, font=("Helvetica", 11, "bold"), height=7, bg="#1f2937", fg="white", selectbackground="#2563eb", borderwidth=0)
-    for eq in equipos:
-        listbox.insert(tk.END, eq)
-    listbox.select_set(0)
-    listbox.pack(fill="x", padx=40, pady=5)
-
-    def confirmar():
-        global EQUIPO_ACTUAL, ES_SERVIDOR_CENTRAL
-        idx = listbox.curselection()
-        if not idx:
-            return
-        EQUIPO_ACTUAL = listbox.get(idx[0])
-        ES_SERVIDOR_CENTRAL = (EQUIPO_ACTUAL.upper() == "ADM1")
-        reinicio_necesario = configurar_entorno_sistema(EQUIPO_ACTUAL)
-        if reinicio_necesario:
-            messagebox.showinfo(
-                "Cambio de Nombre de Equipo",
-                f"Este equipo se ha configurado como '{EQUIPO_ACTUAL}' en el grupo '{CONFIG.get('workgroup')}'.\n\n"
-                f"Se ha creado la carpeta compartida {CARPETA_PPT} y su acceso directo en el Escritorio.\n"
-                "Nota: Si es la primera vez que cambias el nombre de red, reinicia el equipo."
-            )
-        root.destroy()
-
-    tk.Button(root, text="INICIAR SISTEMA EN ESTE EQUIPO", command=confirmar, bg="#10b981", fg="white", font=("Helvetica", 10, "bold"), pady=8).pack(fill="x", padx=40, pady=15)
-    root.mainloop()
-
 if __name__ == '__main__':
     if not es_admin():
         if SISTEMA == 'Windows':
@@ -630,7 +629,6 @@ if __name__ == '__main__':
             subprocess.Popen(["osascript", "-e", cmd_mac])
             sys.exit()
 
-    selector_inicio()
     threading.Thread(target=sincronizador_segundo_plano, daemon=True).start()
     threading.Timer(1.5, lambda: webbrowser.open("http://127.0.0.1:5000")).start()
     app.run(host='0.0.0.0', port=5000, threaded=True)

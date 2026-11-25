@@ -40,20 +40,16 @@ jobs:
       - name: Descargar código
         uses: actions/checkout@v4
 
-      - name: Configurar Python 3.11 (Intel x86_64)
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-          architecture: 'x64'
+      - name: Instalar Rosetta 2 para compilación Intel
+        run: sudo softwareupdate --install-rosetta --agree-to-license
 
-      - name: Instalar dependencias
+      - name: Instalar dependencias y compilar en arquitectura Intel (x86_64)
         run: |
-          pip install flask pandas openpyxl requests pyinstaller
-
-      - name: Compilar APPs para Mac Intel
-        run: |
-          pyinstaller --windowed --target-architecture x86_64 --name CongresoApp CongresoApp.py
-          pyinstaller --windowed --target-architecture x86_64 --name Configurador_Congreso Configurador_Congreso.py
+          arch -x86_64 /usr/bin/python3 -m venv venv_intel
+          arch -x86_64 ./venv_intel/bin/pip install --upgrade pip
+          arch -x86_64 ./venv_intel/bin/pip install flask pandas openpyxl requests pyinstaller
+          arch -x86_64 ./venv_intel/bin/pyinstaller --windowed --name CongresoApp CongresoApp.py
+          arch -x86_64 ./venv_intel/bin/pyinstaller --windowed --name Configurador_Congreso Configurador_Congreso.py
 
       - name: Crear imagen de disco DMG (hdiutil)
         run: |

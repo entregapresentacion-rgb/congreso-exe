@@ -28,7 +28,6 @@ def sanitizar_nombre_carpeta(texto, max_len=None):
     else:
         valor = str(texto).strip()
 
-    # Eliminar caracteres de control y caracteres no válidos para nombres de carpeta/archivo
     valor = re.sub(r'[\x00-\x1f\x7f]', '', valor)
     valor = re.sub(r'[\\/:*?"<>|]+', '-', valor)
     valor = re.sub(r'\s+', ' ', valor).strip(' .-_')
@@ -176,7 +175,7 @@ HTML_CONFIG = """<!DOCTYPE html>
             height: 100%;
         }
         .multi-cols-box {
-            max-height: 145px;
+            max-height: 155px;
             overflow-y: auto;
             background-color: #141b2d;
             border: 1px solid rgba(255, 255, 255, 0.12);
@@ -218,18 +217,6 @@ HTML_CONFIG = """<!DOCTYPE html>
             border-radius: 4px;
             font-size: 0.78rem;
         }
-        .step-badge {
-            width: 26px;
-            height: 26px;
-            border-radius: 50%;
-            background: linear-gradient(135deg, #0162e8, #00b9ff);
-            display: inline-flex;
-            align-items: center;
-            justify-content: center;
-            font-weight: 700;
-            font-size: 0.8rem;
-            flex-shrink: 0;
-        }
     </style>
 </head>
 <body>
@@ -244,15 +231,15 @@ HTML_CONFIG = """<!DOCTYPE html>
     </header>
 
     <nav class="valex-subnav">
-        <span class="subnav-item active"><i class="bi bi-sliders"></i> Paso 1: Configurador USB</span>
-        <span class="subnav-item"><i class="bi bi-play-circle"></i> Paso 2: Ejecutar CongresoApp</span>
+        <span class="subnav-item active"><i class="bi bi-sliders"></i> Configurador USB</span>
+        <span class="subnav-item"><i class="bi bi-folder-symlink"></i> Nivel 3 (≤50 car.) + Participantes</span>
     </nav>
 
     <div class="container-fluid px-4 pt-4" style="max-width: 1280px;">
         <div class="mb-4">
             <h4 class="fw-bold mb-1">Configurador de Paquete USB</h4>
             <p class="mb-0" style="color: var(--text-muted); font-size: 0.88rem;">
-                Nivel 3 por defecto con <strong>Hora inicio sesión</strong>, <strong>Hora final</strong>, <strong>Título de sesión</strong>, <strong>Sala</strong> y <strong>Día</strong> · Sanitizado y limitado a <strong>50 caracteres</strong>
+                Nivel 3 por defecto con <strong>Hora inicio</strong>, <strong>Hora fin</strong>, <strong>Título sesión</strong>, <strong>Sala</strong> y <strong>Día</strong> · Sanitizado, máx. <strong>50 caracteres</strong> y subcarpeta por participante
             </p>
         </div>
 
@@ -277,7 +264,7 @@ HTML_CONFIG = """<!DOCTYPE html>
                 <div class="kpi-card kpi-green">
                     <div class="kpi-title">Nivel 3 (Máx. 50 car.)</div>
                     <div class="kpi-value" id="kpiNivel3Cols">5 Campos</div>
-                    <div class="kpi-sub" id="kpiNivel3Resumen">Hora inicio · Hora final · Sesión · Sala · Día</div>
+                    <div class="kpi-sub" id="kpiNivel3Resumen">Hora inicio · Hora fin · Título sesión · Sala · Día</div>
                     <svg class="kpi-wave" viewBox="0 0 200 40" preserveAspectRatio="none"><path d="M0,32 L35,18 L75,26 L115,10 L155,20 L200,8 L200,40 L0,40 Z" fill="#ffffff"/></svg>
                 </div>
             </div>
@@ -331,15 +318,14 @@ HTML_CONFIG = """<!DOCTYPE html>
                                 </div>
                             </div>
 
-                            <!-- 4. Jerarquía PPT con Nivel 3 multi-columna por defecto -->
                             <div class="mb-4">
-                                <label class="form-label">4. Orden de subcarpetas dentro de PPT</label>
+                                <label class="form-label">4. Estructura de carpetas dentro de PPT</label>
                                 <div class="row g-3 mb-3">
                                     <div class="col-md-3">
                                         <div class="nivel-box">
                                             <small class="d-block text-info fw-semibold mb-1" style="font-size:0.74rem;">NIVEL 1 (Raíz)</small>
                                             <select name="nivel_1" id="nivel_1" class="form-select form-select-sm" onchange="actualizarVistaPrevia()">
-                                                <option value="Sala">Sala</option>
+                                                <option value="SALA">SALA</option>
                                             </select>
                                         </div>
                                     </div>
@@ -347,7 +333,7 @@ HTML_CONFIG = """<!DOCTYPE html>
                                         <div class="nivel-box">
                                             <small class="d-block text-info fw-semibold mb-1" style="font-size:0.74rem;">NIVEL 2</small>
                                             <select name="nivel_2" id="nivel_2" class="form-select form-select-sm" onchange="actualizarVistaPrevia()">
-                                                <option value="Dia">Dia</option>
+                                                <option value="DÍA">DÍA</option>
                                             </select>
                                         </div>
                                     </div>
@@ -356,24 +342,24 @@ HTML_CONFIG = """<!DOCTYPE html>
                                             <small class="d-block text-info fw-semibold mb-1" style="font-size:0.74rem;">NIVEL 3 (Sesión · ≤50 car.)</small>
                                             <div id="nivel3Checks" class="multi-cols-box mb-2">
                                                 <div class="form-check">
-                                                    <input class="form-check-input nivel3-chk" type="checkbox" name="nivel_3_cols" value="Hora inicio sesion" id="n3_def_1" checked onchange="actualizarVistaPrevia()">
-                                                    <label class="form-check-label small" for="n3_def_1">Hora inicio sesion</label>
+                                                    <input class="form-check-input nivel3-chk" type="checkbox" name="nivel_3_cols" value="HORA INICIO" id="n3_def_1" checked onchange="actualizarVistaPrevia()">
+                                                    <label class="form-check-label small" for="n3_def_1">HORA INICIO</label>
                                                 </div>
                                                 <div class="form-check">
-                                                    <input class="form-check-input nivel3-chk" type="checkbox" name="nivel_3_cols" value="Hora final" id="n3_def_2" checked onchange="actualizarVistaPrevia()">
-                                                    <label class="form-check-label small" for="n3_def_2">Hora final</label>
+                                                    <input class="form-check-input nivel3-chk" type="checkbox" name="nivel_3_cols" value="HORA FIN" id="n3_def_2" checked onchange="actualizarVistaPrevia()">
+                                                    <label class="form-check-label small" for="n3_def_2">HORA FIN</label>
                                                 </div>
                                                 <div class="form-check">
-                                                    <input class="form-check-input nivel3-chk" type="checkbox" name="nivel_3_cols" value="Titulo de sesion" id="n3_def_3" checked onchange="actualizarVistaPrevia()">
-                                                    <label class="form-check-label small" for="n3_def_3">Titulo de sesion</label>
+                                                    <input class="form-check-input nivel3-chk" type="checkbox" name="nivel_3_cols" value="TÍTULO SESIÓN" id="n3_def_3" checked onchange="actualizarVistaPrevia()">
+                                                    <label class="form-check-label small" for="n3_def_3">TÍTULO SESIÓN</label>
                                                 </div>
                                                 <div class="form-check">
-                                                    <input class="form-check-input nivel3-chk" type="checkbox" name="nivel_3_cols" value="Sala" id="n3_def_4" checked onchange="actualizarVistaPrevia()">
-                                                    <label class="form-check-label small" for="n3_def_4">Sala</label>
+                                                    <input class="form-check-input nivel3-chk" type="checkbox" name="nivel_3_cols" value="SALA" id="n3_def_4" checked onchange="actualizarVistaPrevia()">
+                                                    <label class="form-check-label small" for="n3_def_4">SALA</label>
                                                 </div>
                                                 <div class="form-check">
-                                                    <input class="form-check-input nivel3-chk" type="checkbox" name="nivel_3_cols" value="Dia" id="n3_def_5" checked onchange="actualizarVistaPrevia()">
-                                                    <label class="form-check-label small" for="n3_def_5">Dia</label>
+                                                    <input class="form-check-input nivel3-chk" type="checkbox" name="nivel_3_cols" value="DÍA" id="n3_def_5" checked onchange="actualizarVistaPrevia()">
+                                                    <label class="form-check-label small" for="n3_def_5">DÍA</label>
                                                 </div>
                                             </div>
                                             <label class="small text-secondary d-block mb-1" style="font-size:0.7rem;">Separador:</label>
@@ -382,17 +368,18 @@ HTML_CONFIG = """<!DOCTYPE html>
                                     </div>
                                     <div class="col-md-3">
                                         <div class="nivel-box">
-                                            <small class="d-block text-info fw-semibold mb-1" style="font-size:0.74rem;">NIVEL 4 (Final)</small>
+                                            <small class="d-block text-info fw-semibold mb-1" style="font-size:0.74rem;">NIVEL 4 (Participante)</small>
                                             <select name="nivel_4" id="nivel_4" class="form-select form-select-sm" onchange="actualizarVistaPrevia()">
-                                                <option value="Participantes">Participantes</option>
+                                                <option value="PARTICIPANTE 1">PARTICIPANTE 1</option>
                                             </select>
+                                            <small class="d-block text-secondary mt-2" style="font-size:0.7rem;">Además se crean carpetas para cada participante detectado.</small>
                                         </div>
                                     </div>
                                 </div>
 
                                 <div class="ruta-preview" id="vistaPrevia">
                                     <i class="bi bi-folder-fill text-warning mt-1"></i>
-                                    <span>PPT / Sala / Dia / [Hora inicio sesion - Hora final - Titulo de sesion - Sala - Dia (≤50 car.)] / Participantes / archivo.pptx</span>
+                                    <span>PPT / SALA / DÍA / [HORA INICIO - HORA FIN - TÍTULO SESIÓN - SALA - DÍA · ≤50 car.] / [Carpeta por Participante] / archivo.pptx</span>
                                 </div>
                             </div>
 
@@ -412,44 +399,22 @@ HTML_CONFIG = """<!DOCTYPE html>
                     <div class="valex-card h-100">
                         <div class="valex-card-header">
                             <div>
-                                <h5 class="valex-card-title">Seguridad de Nombres</h5>
-                                <div class="valex-card-subtitle">Evita errores en rutas y presentaciones</div>
+                                <h5 class="valex-card-title">Salas Detectadas</h5>
+                                <div class="valex-card-subtitle">Previsualización desde el Excel</div>
                             </div>
-                            <i class="bi bi-shield-check text-info fs-5"></i>
+                            <i class="bi bi-door-open text-info fs-5"></i>
                         </div>
-                        <div class="p-4 d-flex flex-column gap-3" style="font-size: 0.85rem;">
-                            <div class="d-flex gap-3">
-                                <span class="step-badge">1</span>
-                                <div>
-                                    <strong class="text-white d-block">Nivel 3 por defecto</strong>
-                                    <span style="color: var(--text-muted);">Preselecciona <em>Hora inicio sesión</em>, <em>Hora final</em>, <em>Título de sesión</em>, <em>Sala</em> y <em>Día</em>.</span>
-                                </div>
+                        <div class="p-4">
+                            <div id="listaSalasPreview" class="d-flex flex-wrap gap-2 mb-4">
+                                <span style="color: var(--text-muted); font-size: 0.82rem;">Sube el Excel para ver las salas aquí.</span>
                             </div>
-                            <div class="d-flex gap-3">
-                                <span class="step-badge">2</span>
-                                <div>
-                                    <strong class="text-white d-block">Sanitización automática</strong>
-                                    <span style="color: var(--text-muted);">Limpia caracteres especiales no válidos (<code>\ / : * ? " &lt; &gt; |</code>) en todos los nombres de carpeta.</span>
-                                </div>
-                            </div>
-                            <div class="d-flex gap-3">
-                                <span class="step-badge">3</span>
-                                <div>
-                                    <strong class="text-white d-block">Límite de 50 caracteres</strong>
-                                    <span style="color: var(--text-muted);">Trunca el nombre de sesión (Nivel 3) a un máximo de <strong>50 caracteres</strong> para evitar problemas al colocar presentaciones dentro.</span>
-                                </div>
-                            </div>
-
                             <hr style="border-color: var(--border-color);">
-
-                            <div>
-                                <small class="text-uppercase fw-bold d-block mb-2" style="color: var(--text-muted); font-size: 0.72rem;">
-                                    Salas detectadas en el Excel
-                                </small>
-                                <div id="listaSalasPreview" class="d-flex flex-wrap gap-2">
-                                    <span style="color: var(--text-muted); font-size: 0.82rem;">Sube el Excel para verlas aquí.</span>
-                                </div>
-                            </div>
+                            <p class="small mb-2 text-white fw-semibold">Reglas aplicadas automáticamente:</p>
+                            <ul class="small mb-0 ps-3" style="color: var(--text-muted);">
+                                <li>Sanitización de caracteres especiales en carpetas.</li>
+                                <li>Nivel 3 truncado a un máximo de <strong>50 caracteres</strong>.</li>
+                                <li>Carpeta individual por cada participante de la sesión.</li>
+                            </ul>
                         </div>
                     </div>
                 </div>
@@ -459,15 +424,15 @@ HTML_CONFIG = """<!DOCTYPE html>
 
 <script>
 const DEFECTO_N3 = [
-    ['hora inicio sesion', 'hora inicio', 'inicio sesion', 'hora de inicio'],
-    ['hora final', 'hora fin', 'fin sesion', 'hora de fin'],
-    ['titulo de sesion', 'titulo sesion', 'sesion', 'titulo'],
+    ['hora inicio', 'hora inicio sesion', 'inicio'],
+    ['hora fin', 'hora final', 'fin'],
+    ['titulo sesion', 'titulo de sesion', 'titulo sesion es', 'sesion', 'titulo'],
     ['sala'],
     ['dia', 'fecha']
 ];
 
 function normalizar(texto) {
-    return String(texto || '').toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/\s+/g, " ").trim();
+    return String(texto || '').toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]+/g, " ").trim();
 }
 
 function coincideConLista(colNorm, patrones) {
@@ -492,7 +457,7 @@ function leerColumnasExcel(input) {
         const workbook = XLSX.read(data, {type: 'array'});
         const rows = XLSX.utils.sheet_to_json(workbook.Sheets[workbook.SheetNames[0]], {header: 1});
         if (rows.length > 0) {
-            document.getElementById('kpiFilas').textContent = (rows.length - 1) + ' ponencias/filas';
+            document.getElementById('kpiFilas').textContent = (rows.length - 1) + ' filas';
             const headers = rows[0].filter(h => h !== undefined && h !== null && String(h).trim() !== '').map(h => String(h).trim());
             rellenarDesplegables(headers);
 
@@ -518,7 +483,7 @@ function rellenarDesplegables(columnas) {
     const selectores = [
         { id: 'nivel_1', claves: ['sala'] },
         { id: 'nivel_2', claves: ['dia', 'fecha'] },
-        { id: 'nivel_4', claves: ['participantes', 'ponente', 'ponentes', 'autor'] }
+        { id: 'nivel_4', claves: ['participante 1', 'participante', 'ponente', 'ponentes'] }
     ];
 
     selectores.forEach(sel => {
@@ -538,7 +503,6 @@ function rellenarDesplegables(columnas) {
         });
     });
 
-    // Marcar por defecto en Nivel 3: Hora inicio sesion, Hora final, Titulo de sesion, Sala, Dia
     const n3Container = document.getElementById('nivel3Checks');
     let marcadaAlguna = false;
     n3Container.innerHTML = columnas.map((col, idx) => {
@@ -583,7 +547,7 @@ function actualizarVistaPrevia() {
     if (n1) partes.push(n1);
     if (n2) partes.push(n2);
     if (n3.cols.length > 0) partes.push(`[${n3.texto} · ≤50 car.]`);
-    if (n4) partes.push(n4);
+    partes.push(n4 ? `[Participantes / ${n4}]` : '[Carpeta por Participante]');
     partes.push('archivo.pptx');
 
     document.getElementById('vistaPrevia').innerHTML = `<i class="bi bi-folder-fill text-warning mt-1"></i><span>${partes.join(' / ')}</span>`;
@@ -614,7 +578,7 @@ def index():
                 num_admins = int(request.form.get('num_admins', 2))
                 equipos = [f"ADM{i}" for i in range(1, num_admins + 1)]
 
-                col_sala = next((c for c in df.columns if str(c).strip().lower() == 'sala'), None)
+                col_sala = next((c for c in df.columns if re.sub(r'[^a-z0-9]+', '', str(c).lower()) == 'sala'), None)
                 if col_sala:
                     salas = sorted(list(set(sanitizar_nombre_carpeta(s) for s in df[col_sala].dropna() if str(s).strip())))
                     equipos.extend(salas)

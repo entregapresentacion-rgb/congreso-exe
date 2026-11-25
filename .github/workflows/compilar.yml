@@ -1,0 +1,38 @@
+name: Compilar Ejecutables Congreso
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main, master ]
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - name: Descargar código del repositorio
+        uses: actions/checkout@v4
+
+      - name: Configurar Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Instalar librerías necesarias
+        run: |
+          pip install flask pandas openpyxl requests pyinstaller
+
+      - name: Compilar CongresoApp.exe
+        run: |
+          pyinstaller --onefile --windowed --name CongresoApp CongresoApp.py
+
+      - name: Compilar Configurador_Congreso.exe
+        run: |
+          pyinstaller --onefile --windowed --name Configurador_Congreso Configurador_Congreso.py
+
+      - name: Empaquetar ambos EXE para descarga
+        uses: actions/upload-artifact@v4
+        with:
+          name: Sistema_Congreso_EXE
+          path: |
+            dist/CongresoApp.exe
+            dist/Configurador_Congreso.exe

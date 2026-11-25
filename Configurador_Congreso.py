@@ -15,7 +15,10 @@ def obtener_ruta_base():
     if getattr(sys, 'frozen', False):
         ruta = os.path.dirname(sys.executable)
         if SISTEMA == 'Darwin' and ruta.endswith('Contents/MacOS'):
-            return os.path.abspath(os.path.join(ruta, '..', '..', '..'))
+            ruta = os.path.abspath(os.path.join(ruta, '..', '..', '..'))
+        # Evitar error Read-only file system si macOS ejecuta en AppTranslocation
+        if 'AppTranslocation' in ruta or not os.access(ruta, os.W_OK):
+            return os.path.join(os.path.expanduser("~"), "Desktop")
         return ruta
     return os.path.abspath(os.path.dirname(__file__))
 
@@ -27,14 +30,18 @@ HTML_CONFIG = """<!DOCTYPE html>
     <meta charset="UTF-8">
     <title>Configurador de Congreso</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
-    <style>body { background: #f0f2f5; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; }</style>
+    <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+    <style>
+        body { background: #f0f2f5; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; }
+        .ruta-preview { background: #1e293b; color: #38bdf8; font-family: monospace; padding: 10px 14px; border-radius: 8px; font-size: 0.9rem; }
+    </style>
 </head>
 <body class="py-4">
-<div class="container" style="max-width: 760px;">
+<div class="container" style="max-width: 780px;">
     <div class="card shadow border-0 rounded-4 overflow-hidden">
         <div class="bg-dark text-white p-4">
             <h4 class="mb-0 fw-bold">⚙️ Configurador de Paquete USB - Congreso</h4>
-            <small class="text-secondary">Genera la configuración y estructura de carpetas desde tu Excel</small>
+            <small class="text-secondary">Carga el Excel para detectar las columnas y configurar la estructura de carpetas</small>
         </div>
         <div class="card-body p-4">
             {% if mensaje %}
@@ -47,10 +54,10 @@ HTML_CONFIG = """<!DOCTYPE html>
             <form method="POST" enctype="multipart/form-data">
                 <div class="mb-3">
                     <label class="form-label fw-bold">1. Archivo Excel del Congreso (.xlsx):</label>
-                    <input type="file" name="excel" class="form-control" accept=".xlsx,.xls" required>
+                    <input type="file" id="inputExcel" name="excel" class="form-control" accept=".xlsx,.xls" required onchange="leerColumnasExcel(this)">
                 </div>
 
-                <div class="row g-3 mb-3">
+                <div class="row g-3 mb-4">
                     <div class="col-md-6">
                         <label class="form-label fw-bold">2. Grupo de Trabajo (Red):</label>
                         <input type="text" name="workgroup" value="CONGRESO" class="form-control" required>
@@ -61,15 +68,43 @@ HTML_CONFIG = """<!DOCTYPE html>
                     </div>
                 </div>
 
+                <!-- 4. Desplegables dinámicos de jerarquía de carpetas -->
                 <div class="mb-3">
-                    <label class="form-label fw-bold">4. Orden de subcarpetas dentro de PPT (separadas por coma):</label>
-                    <input type="text" name="orden_carpetas" value="Sala, Sesion" class="form-control" placeholder="Ej: Fecha, Sala, Sesion">
-                    <small class="text-muted">Escribe los nombres exactos de las columnas de tu Excel en el orden deseado.</small>
+                    <label class="form-label fw-bold">4. Orden de subcarpetas dentro de PPT (Selecciona las columnas del Excel):</label>
+                    <div class="row g-2 mb-2">
+                        <div class="col-md-3">
+                            <label class="small text-muted fw-semibold">Nivel 1 (Raíz PPT)</label>
+                            <select name="nivel_1" id="nivel_1" class="form-select form-select-sm col-selector" onchange="actualizarVistaPrevia()">
+                                <option value="Sala">Sala</option>
+                            </select>
+                        </div>
+                        <div class="col-md-3">
+                            <label class="small text-muted fw-semibold">Nivel 2</label>
+                            <select name="nivel_2" id="nivel_2" class="form-select form-select-sm col-selector" onchange="actualizarVistaPrevia()">
+                                <option value="Dia">Dia</option>
+                            </select>
+                        </div>
+                        <div class="col-md-3">
+                            <label class="small text-muted fw-semibold">Nivel 3</label>
+                            <select name="nivel_3" id="nivel_3" class="form-select form-select-sm col-selector" onchange="actualizarVistaPrevia()">
+                                <option value="Titulo de sesion">Titulo de sesion</option>
+                            </select>
+                        </div>
+                        <div class="col-md-3">
+                            <label class="small text-muted fw-semibold">Nivel 4 (Interior)</label>
+                            <select name="nivel_4" id="nivel_4" class="form-select form-select-sm col-selector" onchange="actualizarVistaPrevia()">
+                                <option value="Participantes">Participantes</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div class="ruta-preview" id="vistaPrevia">
+                        📁 Estructura resultante: PPT / Sala / Dia / Titulo de sesion / Participantes / archivo.pptx
+                    </div>
                 </div>
 
                 <div class="mb-4">
-                    <label class="form-label fw-bold">5. Salas adicionales (opcional, detectadas automáticamente del Excel):</label>
-                    <textarea name="equipos_extra" rows="2" class="form-control" placeholder="Si quieres añadir algún equipo extra manualmente, escríbelo aquí (uno por línea)"></textarea>
+                    <label class="form-label fw-bold">5. Salas adicionales (opcional, las del Excel se detectan solas):</label>
+                    <textarea name="equipos_extra" rows="2" class="form-control" placeholder="Escribe aquí otros nombres de equipo si los necesitas (uno por línea)"></textarea>
                 </div>
 
                 <button type="submit" class="btn btn-success btn-lg w-100 fw-bold">📦 GENERAR CARPETA LISTA PARA PENDRIVE</button>
@@ -77,6 +112,67 @@ HTML_CONFIG = """<!DOCTYPE html>
         </div>
     </div>
 </div>
+
+<script>
+function normalizar(texto) {
+    return texto.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim();
+}
+
+function leerColumnasExcel(input) {
+    if (!input.files || !input.files[0]) return;
+    const reader = new FileReader();
+    reader.onload = function(e) {
+        const data = new Uint8Array(e.target.result);
+        const workbook = XLSX.read(data, {type: 'array'});
+        const firstSheet = workbook.Sheets[workbook.SheetNames[0]];
+        const rows = XLSX.utils.sheet_to_json(firstSheet, {header: 1});
+        
+        if (rows.length > 0) {
+            const headers = rows[0].filter(h => h !== undefined && h !== null && String(h).trim() !== '').map(h => String(h).trim());
+            rellenarDesplegables(headers);
+        }
+    };
+    reader.readAsArrayBuffer(input.files[0]);
+}
+
+function rellenarDesplegables(columnas) {
+    const selectores = [
+        { id: 'nivel_1', claves: ['sala'] },
+        { id: 'nivel_2', claves: ['dia', 'fecha'] },
+        { id: 'nivel_3', claves: ['titulo de sesion', 'sesion', 'titulo sesion'] },
+        { id: 'nivel_4', claves: ['participantes', 'ponente', 'ponentes', 'autor'] }
+    ];
+
+    selectores.forEach(sel => {
+        const el = document.getElementById(sel.id);
+        el.innerHTML = '<option value="">-- Ninguno (Omitir) --</option>';
+        
+        let seleccionada = false;
+        columnas.forEach(col => {
+            const opt = document.createElement('option');
+            opt.value = col;
+            opt.textContent = col;
+            
+            const colNorm = normalizar(col);
+            if (!seleccionada && sel.claves.some(k => colNorm === k || colNorm.includes(k))) {
+                opt.selected = true;
+                seleccionada = true;
+            }
+            el.appendChild(opt);
+        });
+    });
+    actualizarVistaPrevia();
+}
+
+function actualizarVistaPrevia() {
+    const niveles = ['nivel_1', 'nivel_2', 'nivel_3', 'nivel_4']
+        .map(id => document.getElementById(id).value)
+        .filter(val => val !== '');
+    
+    const ruta = niveles.length > 0 ? 'PPT / ' + niveles.join(' / ') + ' / archivo.pptx' : 'PPT / archivo.pptx';
+    document.getElementById('vistaPrevia').textContent = '📁 Estructura resultante: ' + ruta;
+}
+</script>
 </body>
 </html>"""
 
@@ -102,8 +198,10 @@ def index():
                 num_admins = int(request.form.get('num_admins', 2))
                 equipos = [f"ADM{i}" for i in range(1, num_admins + 1)]
 
-                if 'Sala' in df.columns:
-                    salas = sorted(list(set(str(s).strip() for s in df['Sala'].dropna() if str(s).strip())))
+                # Detectar columna de Sala sin importar mayúsculas/tildes
+                col_sala = next((c for c in df.columns if str(c).strip().lower() == 'sala'), None)
+                if col_sala:
+                    salas = sorted(list(set(str(s).strip() for s in df[col_sala].dropna() if str(s).strip())))
                     equipos.extend(salas)
 
                 extras = [l.strip() for l in request.form.get('equipos_extra', '').splitlines() if l.strip()]
@@ -111,8 +209,11 @@ def index():
                     if ex not in equipos:
                         equipos.append(ex)
 
-                orden_raw = request.form.get('orden_carpetas', 'Sala, Sesion')
-                orden_carpetas = [c.strip() for c in orden_raw.split(',') if c.strip()]
+                orden_carpetas = []
+                for n in ['nivel_1', 'nivel_2', 'nivel_3', 'nivel_4']:
+                    val = request.form.get(n, '').strip()
+                    if val and val not in orden_carpetas:
+                        orden_carpetas.append(val)
 
                 config_data = {
                     "workgroup": request.form.get('workgroup', 'CONGRESO').strip().upper(),
@@ -123,14 +224,20 @@ def index():
                 with open(os.path.join(salida, "config_congreso.json"), "w", encoding="utf-8") as f:
                     json.dump(config_data, f, indent=4, ensure_ascii=False)
 
-                exe_win = os.path.join(base, "CongresoApp.exe")
-                app_mac = os.path.join(base, "CongresoApp.app")
-                if os.path.exists(exe_win):
-                    shutil.copy2(exe_win, os.path.join(salida, "CongresoApp.exe"))
-                if os.path.exists(app_mac):
-                    shutil.copytree(app_mac, os.path.join(salida, "CongresoApp.app"))
+                # Buscar CongresoApp en la carpeta de la app o en el Escritorio
+                rutas_busqueda = [base, os.path.dirname(os.path.abspath(sys.executable))]
+                if SISTEMA == 'Darwin':
+                    rutas_busqueda.append(os.path.abspath(os.path.join(os.path.dirname(sys.executable), '..', '..', '..')))
 
-                mensaje = f"✔ ¡Paquete generado con éxito en: {salida}! Equipos configurados: {', '.join(equipos)}"
+                for r_busq in rutas_busqueda:
+                    exe_win = os.path.join(r_busq, "CongresoApp.exe")
+                    app_mac = os.path.join(r_busq, "CongresoApp.app")
+                    if os.path.exists(exe_win) and not os.path.exists(os.path.join(salida, "CongresoApp.exe")):
+                        shutil.copy2(exe_win, os.path.join(salida, "CongresoApp.exe"))
+                    if os.path.exists(app_mac) and not os.path.exists(os.path.join(salida, "CongresoApp.app")):
+                        shutil.copytree(app_mac, os.path.join(salida, "CongresoApp.app"))
+
+                mensaje = f"✔ ¡Paquete generado con éxito en: {salida}! Estructura: {' > '.join(orden_carpetas)}"
                 if SISTEMA == 'Windows':
                     os.startfile(salida)
                 elif SISTEMA == 'Darwin':

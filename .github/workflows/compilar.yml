@@ -1,4 +1,4 @@
-name: Compilar Ejecutables Congreso
+name: Compilar Ejecutables Congreso (Windows EXE + Mac DMG)
 
 on:
   workflow_dispatch:
@@ -9,7 +9,7 @@ jobs:
   build-windows:
     runs-on: windows-latest
     steps:
-      - name: Descargar código del repositorio
+      - name: Descargar código
         uses: actions/checkout@v4
 
       - name: Configurar Python 3.11
@@ -17,22 +17,54 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: Instalar librerías necesarias
+      - name: Instalar dependencias
         run: |
           pip install flask pandas openpyxl requests pyinstaller
 
-      - name: Compilar CongresoApp.exe
+      - name: Compilar EXEs para Windows
         run: |
           pyinstaller --onefile --windowed --name CongresoApp CongresoApp.py
-
-      - name: Compilar Configurador_Congreso.exe
-        run: |
           pyinstaller --onefile --windowed --name Configurador_Congreso Configurador_Congreso.py
 
-      - name: Empaquetar ambos EXE para descarga
+      - name: Subir artefacto Windows
         uses: actions/upload-artifact@v4
         with:
-          name: Sistema_Congreso_EXE
+          name: Sistema_Congreso_Windows_EXE
           path: |
             dist/CongresoApp.exe
             dist/Configurador_Congreso.exe
+
+  build-macos-intel:
+    runs-on: macos-13
+    steps:
+      - name: Descargar código
+        uses: actions/checkout@v4
+
+      - name: Configurar Python 3.11 (Intel x86_64)
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          architecture: 'x64'
+
+      - name: Instalar dependencias
+        run: |
+          pip install flask pandas openpyxl requests pyinstaller
+
+      - name: Compilar APPs para Mac Intel
+        run: |
+          pyinstaller --windowed --target-architecture x86_64 --name CongresoApp CongresoApp.py
+          pyinstaller --windowed --target-architecture x86_64 --name Configurador_Congreso Configurador_Congreso.py
+
+      - name: Crear imagen de disco DMG (hdiutil)
+        run: |
+          mkdir -p dmg_staging
+          cp -R dist/CongresoApp.app dmg_staging/
+          cp -R dist/Configurador_Congreso.app dmg_staging/
+          ln -s /Applications dmg_staging/Applications
+          hdiutil create -volname "Sistema Congreso" -srcfolder dmg_staging -ov -format UDZO dist/Sistema_Congreso_Mac_Intel.dmg
+
+      - name: Subir artefacto Mac DMG
+        uses: actions/upload-artifact@v4
+        with:
+          name: Sistema_Congreso_Mac_Intel_DMG
+          path: dist/Sistema_Congreso_Mac_Intel.dmg

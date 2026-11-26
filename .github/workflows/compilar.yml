@@ -35,8 +35,8 @@ jobs:
           python -m pip install --upgrade pip
           pip install pyinstaller flask pandas openpyxl
 
-          pyinstaller --noconfirm --windowed --onefile --target-architecture x86_64 --name "Congreso_App" "$APP_PATH"
-          pyinstaller --noconfirm --windowed --onefile --target-architecture x86_64 --name "Configurador_Congreso" "$CFG_PATH"
+          pyinstaller --noconfirm --onefile --target-architecture x86_64 --name "Congreso_App" "$APP_PATH"
+          pyinstaller --noconfirm --onefile --target-architecture x86_64 --name "Configurador_Congreso" "$CFG_PATH"
 
           mkdir -p staging
           cp -R "dist/Congreso_App.app" staging/

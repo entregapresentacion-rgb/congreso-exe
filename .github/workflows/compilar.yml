@@ -1,4 +1,4 @@
-name: Compilar Congreso_App y Configurador
+name: Compilar Sistema Congreso (Mac Intel y Windows)
 
 on:
   push:
@@ -12,23 +12,19 @@ jobs:
       - name: Descargar código del repositorio
         uses: actions/checkout@v4
 
-      - name: Configurar Python x86_64 (Intel)
+      - name: Configurar Python x86_64 (Mac Intel)
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
           architecture: 'x64'
 
-      - name: Instalar dependencias y empaquetar DMG para Mac Intel
+      - name: Compilar y empaquetar apps en ZIP nativo macOS
         run: |
           APP_PATH=$(find . -maxdepth 4 -iname "Congreso_App.py" | head -n 1)
           CFG_PATH=$(find . -maxdepth 4 -iname "Configurador_Congreso.py" | head -n 1)
 
-          if [ -z "$APP_PATH" ]; then
-            echo "ERROR: No se encontró Congreso_App.py"
-            exit 1
-          fi
-          if [ -z "$CFG_PATH" ]; then
-            echo "ERROR: No se encontró Configurador_Congreso.py"
+          if [ -z "$APP_PATH" ] || [ -z "$CFG_PATH" ]; then
+            echo "ERROR: No se encontraron Congreso_App.py o Configurador_Congreso.py"
             exit 1
           fi
 
@@ -38,20 +34,23 @@ jobs:
           pyinstaller --noconfirm --windowed --onedir --target-architecture x86_64 --name "Congreso_App" "$APP_PATH"
           pyinstaller --noconfirm --windowed --onedir --target-architecture x86_64 --name "Configurador_Congreso" "$CFG_PATH"
 
+          xattr -cr "dist/Congreso_App.app" || true
+          xattr -cr "dist/Configurador_Congreso.app" || true
+
           codesign --force --deep --sign - "dist/Congreso_App.app"
           codesign --force --deep --sign - "dist/Configurador_Congreso.app"
 
-          mkdir -p staging
-          cp -R "dist/Congreso_App.app" staging/
-          cp -R "dist/Configurador_Congreso.app" staging/
-          ln -s /Applications staging/Applications
-          hdiutil create -volname "Sistema_Congreso_Mac_Intel" -srcfolder staging -ov -format UDZO "Sistema_Congreso_Mac_Intel.dmg"
+          mkdir -p paquete_mac
+          cp -R "dist/Congreso_App.app" paquete_mac/
+          cp -R "dist/Configurador_Congreso.app" paquete_mac/
 
-      - name: Publicar DMG de macOS Intel
+          ditto -c -k --sequesterRsrc --keepParent "paquete_mac" "Sistema_Congreso_Mac_Intel.zip"
+
+      - name: Publicar paquete macOS Intel
         uses: actions/upload-artifact@v4
         with:
-          name: Sistema_Congreso_macOS_Intel
-          path: Sistema_Congreso_Mac_Intel.dmg
+          name: Sistema_Congreso_Mac_Intel
+          path: Sistema_Congreso_Mac_Intel.zip
 
   compilar-windows:
     runs-on: windows-latest
@@ -59,27 +58,36 @@ jobs:
       - name: Descargar código del repositorio
         uses: actions/checkout@v4
 
-      - name: Configurar Python
+      - name: Configurar Python Windows
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
 
-      - name: Instalar dependencias y empaquetar EXE
+      - name: Compilar y empaquetar apps en ZIP Windows
         shell: bash
         run: |
           APP_PATH=$(find . -maxdepth 4 -iname "Congreso_App.py" | head -n 1)
           CFG_PATH=$(find . -maxdepth 4 -iname "Configurador_Congreso.py" | head -n 1)
 
+          if [ -z "$APP_PATH" ] || [ -z "$CFG_PATH" ]; then
+            echo "ERROR: No se encontraron Congreso_App.py o Configurador_Congreso.py"
+            exit 1
+          fi
+
           python -m pip install --upgrade pip
           pip install pyinstaller flask pandas openpyxl
 
-          pyinstaller --noconfirm --onefile --name "Congreso_App" "$APP_PATH"
-          pyinstaller --noconfirm --onefile --name "Configurador_Congreso" "$CFG_PATH"
+          pyinstaller --noconfirm --windowed --onedir --name "Congreso_App" "$APP_PATH"
+          pyinstaller --noconfirm --windowed --onedir --name "Configurador_Congreso" "$CFG_PATH"
 
-      - name: Publicar EXE de Windows
+          mkdir -p paquete_windows
+          cp -R "dist/Congreso_App" paquete_windows/
+          cp -R "dist/Configurador_Congreso" paquete_windows/
+
+          powershell -Command "Compress-Archive -Path 'paquete_windows\*' -DestinationPath 'Sistema_Congreso_Windows.zip' -Force"
+
+      - name: Publicar paquete Windows
         uses: actions/upload-artifact@v4
         with:
           name: Sistema_Congreso_Windows
-          path: |
-            dist/Congreso_App.exe
-            dist/Configurador_Congreso.exe
+          path: Sistema_Congreso_Windows.zip

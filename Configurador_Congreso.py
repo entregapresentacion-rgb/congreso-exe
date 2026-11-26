@@ -231,7 +231,7 @@ HTML_CONFIG = """<!DOCTYPE html>
             height: 100%;
         }
         .multi-cols-box {
-            max-height: 155px;
+            max-height: 175px;
             overflow-y: auto;
             background-color: #141b2d;
             border: 1px solid rgba(255, 255, 255, 0.12);
@@ -241,6 +241,20 @@ HTML_CONFIG = """<!DOCTYPE html>
         .form-check-input:checked {
             background-color: #0162e8;
             border-color: #00b9ff;
+        }
+        .btn-orden-n3 {
+            padding: 1px 6px;
+            font-size: 0.7rem;
+            line-height: 1.2;
+            background-color: #1f2940;
+            border: 1px solid rgba(255, 255, 255, 0.18);
+            color: #cbd5e1;
+            border-radius: 4px;
+        }
+        .btn-orden-n3:hover {
+            background-color: #0162e8;
+            color: #fff;
+            border-color: #38bdf8;
         }
         .ruta-preview {
             background-color: #101624;
@@ -320,7 +334,7 @@ HTML_CONFIG = """<!DOCTYPE html>
                 <div class="kpi-card kpi-green">
                     <div class="kpi-title">Nivel 3 (≤50 car./campo)</div>
                     <div class="kpi-value" id="kpiNivel3Cols">5 Campos</div>
-                    <div class="kpi-sub" id="kpiNivel3Resumen">Hora inicio · Hora fin · Título sesión · Sala · Día</div>
+                    <div class="kpi-sub" id="kpiNivel3Resumen">HORA INICIO · HORA FIN · TÍTULO SESIÓN · SALA · DÍA</div>
                     <svg class="kpi-wave" viewBox="0 0 200 40" preserveAspectRatio="none"><path d="M0,32 L35,18 L75,26 L115,10 L155,20 L200,8 L200,40 L0,40 Z" fill="#ffffff"/></svg>
                 </div>
             </div>
@@ -353,7 +367,7 @@ HTML_CONFIG = """<!DOCTYPE html>
                         <div class="valex-card-header">
                             <div>
                                 <h5 class="valex-card-title">Parámetros del Congreso</h5>
-                                <div class="valex-card-subtitle">Orden exacto de campos, formato DIA NN, truncado de 50 caracteres y subcarpetas</div>
+                                <div class="valex-card-subtitle">Elige los campos que quieras; por defecto siempre se mantienen HORA INICIO, HORA FIN, TÍTULO SESIÓN, SALA y DÍA</div>
                             </div>
                             <i class="bi bi-sliders text-info fs-5"></i>
                         </div>
@@ -399,29 +413,11 @@ HTML_CONFIG = """<!DOCTYPE html>
                                     </div>
                                     <div class="col-md-3">
                                         <div class="nivel-box" style="border-color: rgba(0, 185, 255, 0.35);">
-                                            <small class="d-block text-info fw-semibold mb-1" style="font-size:0.74rem;">NIVEL 3 · ORDEN (≤50c/campo)</small>
-                                            <div id="nivel3Checks" class="multi-cols-box mb-2">
-                                                <div class="form-check">
-                                                    <input class="form-check-input nivel3-chk" type="checkbox" name="nivel_3_cols" value="HORA INICIO" id="n3_def_1" checked onchange="actualizarVistaPrevia()">
-                                                    <label class="form-check-label small" for="n3_def_1">HORA INICIO</label>
-                                                </div>
-                                                <div class="form-check">
-                                                    <input class="form-check-input nivel3-chk" type="checkbox" name="nivel_3_cols" value="HORA FIN" id="n3_def_2" checked onchange="actualizarVistaPrevia()">
-                                                    <label class="form-check-label small" for="n3_def_2">HORA FIN</label>
-                                                </div>
-                                                <div class="form-check">
-                                                    <input class="form-check-input nivel3-chk" type="checkbox" name="nivel_3_cols" value="TÍTULO SESIÓN" id="n3_def_3" checked onchange="actualizarVistaPrevia()">
-                                                    <label class="form-check-label small" for="n3_def_3">TÍTULO SESIÓN</label>
-                                                </div>
-                                                <div class="form-check">
-                                                    <input class="form-check-input nivel3-chk" type="checkbox" name="nivel_3_cols" value="SALA" id="n3_def_4" checked onchange="actualizarVistaPrevia()">
-                                                    <label class="form-check-label small" for="n3_def_4">SALA</label>
-                                                </div>
-                                                <div class="form-check">
-                                                    <input class="form-check-input nivel3-chk" type="checkbox" name="nivel_3_cols" value="DÍA" id="n3_def_5" checked onchange="actualizarVistaPrevia()">
-                                                    <label class="form-check-label small" for="n3_def_5">DÍA</label>
-                                                </div>
+                                            <div class="d-flex justify-content-between align-items-center mb-1">
+                                                <small class="d-block text-info fw-semibold" style="font-size:0.74rem;">NIVEL 3 · ORDEN (≤50c/campo)</small>
+                                                <button type="button" class="btn-orden-n3" onclick="restaurarDefectoN3()" title="Restaurar campos por defecto">Reset</button>
                                             </div>
+                                            <div id="nivel3Checks" class="multi-cols-box mb-2"></div>
                                             <label class="small text-secondary d-block mb-1" style="font-size:0.7rem;">Separador:</label>
                                             <input type="text" name="separador_nivel_3" id="separador_nivel_3" value=" - " class="form-control form-control-sm" oninput="actualizarVistaPrevia()">
                                         </div>
@@ -442,7 +438,7 @@ HTML_CONFIG = """<!DOCTYPE html>
 
                                 <div class="ruta-preview" id="vistaPrevia">
                                     <i class="bi bi-folder-fill text-warning mt-1"></i>
-                                    <span>PPT / [SALA saneada] / [DIA NN] / [Campo1(≤50) - Campo2(≤50)... saneado] / [Subcarpetas Nivel 4 / Participante saneado] / archivo.pptx</span>
+                                    <span>PPT / SALA / DIA NN (DÍA) / [HORA INICIO(≤50) - HORA FIN(≤50) - TÍTULO SESIÓN(≤50) - SALA(≤50) - DÍA(≤50)] / [Subcarpetas: PARTICIPANTE 1] / archivo.pptx</span>
                                 </div>
                             </div>
 
@@ -474,10 +470,9 @@ HTML_CONFIG = """<!DOCTYPE html>
                             <hr style="border-color: var(--border-color);">
                             <p class="small mb-2 text-white fw-semibold">Reglas integradas:</p>
                             <ul class="small mb-0 ps-3" style="color: var(--text-muted);">
-                                <li>Sanitización estricta (caracteres inválidos, reservados, bytes y espacios).</li>
-                                <li>Nivel 2 formateado como <strong>DIA NN</strong> si está activo.</li>
-                                <li>Nivel 3 trunca cada campo a <strong>50 caracteres</strong> en el orden elegido.</li>
-                                <li>Nivel 4 genera subcarpetas saneadas respetando columnas/participantes.</li>
+                                <li>Por defecto en Nivel 3: <strong>HORA INICIO</strong>, <strong>HORA FIN</strong>, <strong>TÍTULO SESIÓN</strong>, <strong>SALA</strong> y <strong>DÍA</strong> (incluso tras cargar el Excel).</li>
+                                <li>Marca o desmarca cualquier campo y ajusta su orden con ▲ / ▼.</li>
+                                <li>Sanitización estricta, formato <strong>DIA NN</strong> y truncado a <strong>50 caracteres</strong> por campo.</li>
                             </ul>
                         </div>
                     </div>
@@ -487,13 +482,20 @@ HTML_CONFIG = """<!DOCTYPE html>
     </div>
 
 <script>
-const DEFECTO_N3 = [
-    ['hora inicio', 'hora inicio sesion', 'inicio'],
-    ['hora fin', 'hora final', 'fin'],
-    ['titulo sesion', 'titulo de sesion', 'titulo sesion es', 'sesion', 'titulo'],
-    ['sala'],
-    ['dia', 'fecha']
+const CAMPOS_POR_DEFECTO = [
+    { label: 'HORA INICIO', aliases: ['hora inicio', 'hora inicio sesion', 'inicio'] },
+    { label: 'HORA FIN', aliases: ['hora fin', 'hora final', 'fin'] },
+    { label: 'TÍTULO SESIÓN', aliases: ['titulo sesion', 'titulo de sesion', 'titulo sesion es', 'sesion', 'titulo'] },
+    { label: 'SALA', aliases: ['sala'] },
+    { label: 'DÍA', aliases: ['dia', 'fecha'] }
 ];
+
+// Estado ordenado de items del Nivel 3: { value, label, checked }
+let estadoNivel3 = CAMPOS_POR_DEFECTO.map(item => ({
+    value: item.label,
+    label: item.label,
+    checked: true
+}));
 
 function normalizar(texto) {
     return String(texto || '').toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]+/g, " ").trim();
@@ -501,6 +503,54 @@ function normalizar(texto) {
 
 function coincideConLista(colNorm, patrones) {
     return patrones.some(p => colNorm === p || colNorm.includes(p));
+}
+
+function buscarCoincidenciaDefecto(colNorm, listaDefecto) {
+    return listaDefecto.find(item => coincideConLista(colNorm, item.aliases));
+}
+
+function renderizarNivel3() {
+    const n3Container = document.getElementById('nivel3Checks');
+    n3Container.innerHTML = estadoNivel3.map((item, idx) => `
+        <div class="d-flex justify-content-between align-items-center py-1 border-bottom border-secondary border-opacity-25">
+            <div class="form-check m-0">
+                <input class="form-check-input nivel3-chk" type="checkbox" name="nivel_3_cols"
+                    value="${item.value.replace(/"/g, '&quot;')}" id="n3_item_${idx}"
+                    ${item.checked ? 'checked' : ''} onchange="toggleNivel3(${idx}, this.checked)">
+                <label class="form-check-label small" for="n3_item_${idx}">${item.label}</label>
+            </div>
+            <div class="d-flex gap-1 ms-2">
+                <button type="button" class="btn-orden-n3" onclick="moverNivel3(${idx}, -1)" title="Subir">▲</button>
+                <button type="button" class="btn-orden-n3" onclick="moverNivel3(${idx}, 1)" title="Bajar">▼</button>
+            </div>
+        </div>
+    `).join('');
+    actualizarVistaPrevia();
+}
+
+function toggleNivel3(idx, checked) {
+    if (estadoNivel3[idx]) {
+        estadoNivel3[idx].checked = checked;
+        actualizarVistaPrevia();
+    }
+}
+
+function moverNivel3(idx, delta) {
+    const nuevoIdx = idx + delta;
+    if (nuevoIdx < 0 || nuevoIdx >= estadoNivel3.length) return;
+    const temp = estadoNivel3[idx];
+    estadoNivel3[idx] = estadoNivel3[nuevoIdx];
+    estadoNivel3[nuevoIdx] = temp;
+    renderizarNivel3();
+}
+
+function restaurarDefectoN3() {
+    estadoNivel3 = CAMPOS_POR_DEFECTO.map(item => ({
+        value: item.label,
+        label: item.label,
+        checked: true
+    }));
+    renderizarNivel3();
 }
 
 function actualizarKPIs() {
@@ -566,23 +616,36 @@ function rellenarDesplegables(columnas) {
         });
     });
 
-    const n3Container = document.getElementById('nivel3Checks');
-    let marcadaAlguna = false;
-    n3Container.innerHTML = columnas.map((col, idx) => {
-        const colNorm = normalizar(col);
-        const esPorDefecto = DEFECTO_N3.some(grupo => coincideConLista(colNorm, grupo));
-        if (esPorDefecto) marcadaAlguna = true;
-        return `
-            <div class="form-check">
-                <input class="form-check-input nivel3-chk" type="checkbox" name="nivel_3_cols" value="${col.replace(/"/g, '&quot;')}" id="n3_${idx}" ${esPorDefecto ? 'checked' : ''} onchange="actualizarVistaPrevia()">
-                <label class="form-check-label small" for="n3_${idx}">${col}</label>
-            </div>
-        `;
-    }).join('');
+    // Construimos Nivel 3 partiendo SIEMPRE de los 5 campos por defecto en su orden,
+    // mapeando al nombre real de columna del Excel si existe, y añadiendo el resto de columnas sin marcar.
+    const usadasDelExcel = new Set();
+    const listaDefectoMapeada = CAMPOS_POR_DEFECTO.map(def => {
+        const colMatch = columnas.find(col => !usadasDelExcel.has(col) && coincideConLista(normalizar(col), def.aliases));
+        if (colMatch) {
+            usadasDelExcel.add(colMatch);
+            return {
+                value: colMatch,
+                label: def.label + (normalizar(colMatch) !== normalizar(def.label) ? ` (${colMatch})` : ''),
+                checked: true
+            };
+        }
+        return {
+            value: def.label,
+            label: def.label,
+            checked: true
+        };
+    });
 
-    if (!marcadaAlguna && n3Container.querySelector('.nivel3-chk')) {
-        n3Container.querySelector('.nivel3-chk').checked = true;
-    }
+    const columnasRestantes = columnas
+        .filter(col => !usadasDelExcel.has(col))
+        .map(col => ({
+            value: col,
+            label: col,
+            checked: false
+        }));
+
+    estadoNivel3 = [...listaDefectoMapeada, ...columnasRestantes];
+    renderizarNivel3();
 
     const n4Container = document.getElementById('nivel4Checks');
     let marcadaN4 = false;
@@ -606,11 +669,12 @@ function rellenarDesplegables(columnas) {
 }
 
 function obtenerNivel3Seleccionado() {
-    const cols = Array.from(document.querySelectorAll('.nivel3-chk:checked')).map(chk => chk.value);
+    const cols = estadoNivel3.filter(item => item.checked).map(item => item.value);
+    const labels = estadoNivel3.filter(item => item.checked).map(item => item.label);
     const sep = document.getElementById('separador_nivel_3').value;
-    const partesTruncadas = cols.map(c => `[${c}(≤50)]`);
+    const partesTruncadas = labels.map(c => `[${c}(≤50)]`);
     const texto = partesTruncadas.join(sep);
-    return { cols, sep, texto };
+    return { cols, labels, sep, texto };
 }
 
 function actualizarVistaPrevia() {
@@ -621,7 +685,7 @@ function actualizarVistaPrevia() {
     const n4Cols = Array.from(document.querySelectorAll('.nivel4-chk:checked')).map(chk => chk.value);
 
     document.getElementById('kpiNivel3Cols').textContent = n3.cols.length + (n3.cols.length === 1 ? ' Campo' : ' Campos');
-    document.getElementById('kpiNivel3Resumen').textContent = n3.cols.length > 0 ? n3.cols.join(' · ') : 'Omitido';
+    document.getElementById('kpiNivel3Resumen').textContent = n3.labels.length > 0 ? n3.labels.join(' · ') : 'Omitido';
 
     const partes = ['PPT'];
     if (n1) partes.push(n1);
@@ -632,6 +696,9 @@ function actualizarVistaPrevia() {
 
     document.getElementById('vistaPrevia').innerHTML = `<i class="bi bi-folder-fill text-warning mt-1"></i><span>${partes.join(' / ')}</span>`;
 }
+
+// Render inicial antes de cargar Excel
+renderizarNivel3();
 </script>
 </body>
 </html>"""

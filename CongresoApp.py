@@ -6,10 +6,82 @@ import platform
 import threading
 import subprocess
 import webbrowser
+import datetime as dt
 import pandas as pd
 from flask import Flask, render_template_string, request, jsonify
 
 SISTEMA = platform.system()
+
+INVALID_CHARS = set('<>:"/\\|?*') | {chr(i) for i in range(32)}
+RESERVED = (
+    {"CON", "PRN", "AUX", "NUL"}
+    | {f"COM{i}" for i in range(1, 10)}
+    | {f"LPT{i}" for i in range(1, 10)}
+)
+MAX_NAME_BYTES = 240
+
+
+def _cut_bytes(s, n=MAX_NAME_BYTES):
+    b = s.encode("utf-8")
+    if len(b) <= n:
+        return s
+    return b[:n].decode("utf-8", errors="ignore")
+
+
+def sanitize_name(s):
+    if s is None or (isinstance(s, float) and pd.isna(s)):
+        return "_vacio"
+    val = str(s)
+    clean = "".join(" " if ch in INVALID_CHARS else ch for ch in val)
+    clean = re.sub(r"\s+", " ", clean).strip()
+    clean = clean.rstrip(". ")
+    if clean.upper() in RESERVED:
+        clean += "_"
+    clean = _cut_bytes(clean, MAX_NAME_BYTES).rstrip(". ").strip()
+    return clean if clean else "_vacio"
+
+
+def truncate50(s):
+    if s is None:
+        return ""
+    s = str(s)
+    return s if len(s) <= 50 else s[:50]
+
+
+def sanitizar_nombre_carpeta(texto, max_len=None):
+    limpio = sanitize_name(texto)
+    if max_len is not None and len(limpio) > max_len:
+        limpio = sanitize_name(limpio[:max_len])
+    return limpio
+
+
+def formatear_dia_valor(valor, day_choice=0):
+    if valor is None or (isinstance(valor, float) and pd.isna(valor)):
+        return "_sin_fecha"
+    if isinstance(valor, (dt.datetime, dt.date)):
+        return f"DIA {valor.day:02d}"
+    texto = str(valor).strip().strip("\"' ").strip()
+    if not texto:
+        return "_sin_fecha"
+    if re.fullmatch(r"[0-9]{1,2}", texto):
+        d = int(texto)
+        return f"DIA {d:02d}" if 1 <= d <= 31 else "DIA " + sanitize_name(texto)
+    partes = [p for p in re.split(r"[/\-.\s]+", texto) if p != ""]
+    if len(partes) == 3 and all(re.fullmatch(r"[0-9]{1,4}", p) for p in partes):
+        idx = day_choice if 0 <= day_choice < 3 else 0
+        try:
+            d = int(partes[idx])
+            if 1 <= d <= 31:
+                return f"DIA {d:02d}"
+        except ValueError:
+            pass
+    for fmt in ("%Y-%m-%d", "%d/%m/%Y", "%Y%m%d", "%d %B %Y", "%B %d, %Y", "%d %b %Y"):
+        try:
+            parsed = dt.datetime.strptime(texto, fmt)
+            return f"DIA {parsed.day:02d}"
+        except ValueError:
+            continue
+    return "DIA " + sanitize_name(texto)
 
 
 def obtener_ruta_base():
@@ -19,25 +91,6 @@ def obtener_ruta_base():
             ruta = os.path.abspath(os.path.join(ruta, '..', '..', '..'))
         return ruta
     return os.path.abspath(os.path.dirname(__file__))
-
-
-def sanitizar_nombre_carpeta(texto, max_len=None):
-    if texto is None or (isinstance(texto, float) and pd.isna(texto)):
-        valor = "Sin_Especificar"
-    else:
-        valor = str(texto).strip()
-
-    valor = re.sub(r'[\x00-\x1f\x7f]', '', valor)
-    valor = re.sub(r'[\\/:*?"<>|]+', '-', valor)
-    valor = re.sub(r'\s+', ' ', valor).strip(' .-_')
-
-    if not valor:
-        valor = "Sin_Especificar"
-
-    if max_len is not None and len(valor) > max_len:
-        valor = valor[:max_len].rstrip(' .-_') or "Sesion"
-
-    return valor
 
 
 def norm_col(nombre):
@@ -93,11 +146,24 @@ def buscar_columna(columnas, candidatos):
     return None
 
 
+def _formatear_nivel_3(row, cols, sep, max_chars):
+    partes_limpias = []
+    for c in cols:
+        if c and c in row:
+            raw_val = sanitize_name(row[c])
+            partes_limpias.append(truncate50(raw_val)[:max_chars])
+    combinado = sep.join(partes_limpias)
+    return sanitize_name(combinado)
+
+
 def construir_ruta_sesion(row, config, columnas_raw):
     partes = ["PPT"]
-    orden_carpetas = config.get("orden_carpetas", [])
     sep_n3 = config.get("separador_nivel_3", " - ")
     max_n3 = int(config.get("max_chars_nivel_3", 50))
+    formato_dia_nn = bool(config.get("formato_dia_nn", True))
+
+    col_sala = config.get("nivel_1") or buscar_columna(columnas_raw, ["sala"])
+    col_dia = config.get("nivel_2") or buscar_columna(columnas_raw, ["dia", "fecha"])
 
     n3_cols = config.get("nivel_3_columnas")
     if not n3_cols:
@@ -110,42 +176,48 @@ def construir_ruta_sesion(row, config, columnas_raw):
         ]
         n3_cols = [c for c in n3_cols if c]
 
-    tiene_lista_n3 = any(isinstance(x, list) for x in orden_carpetas)
-
+    orden_carpetas = config.get("orden_carpetas", [])
     if orden_carpetas:
         for item in orden_carpetas:
             if isinstance(item, list):
-                valores = [str(row[c]).strip() for c in item if c in row and str(row[c]).strip()]
-                combinado = sep_n3.join(valores) if valores else "Sin_Especificar"
-                partes.append(sanitizar_nombre_carpeta(combinado, max_len=max_n3))
-            elif item in row:
-                partes.append(sanitizar_nombre_carpeta(row[item]))
-        if not tiene_lista_n3 and n3_cols:
-            valores = [str(row[c]).strip() for c in n3_cols if c in row and str(row[c]).strip()]
-            combinado = sep_n3.join(valores) if valores else "Sin_Especificar"
-            partes.append(sanitizar_nombre_carpeta(combinado, max_len=max_n3))
+                if item and item == config.get("nivel_4_columnas"):
+                    continue
+                partes.append(_formatear_nivel_3(row, item if item else n3_cols, sep_n3, max_n3))
+            elif isinstance(item, str) and item in row:
+                if col_dia and item == col_dia and formato_dia_nn:
+                    partes.append(sanitize_name(formatear_dia_valor(row[item])))
+                else:
+                    partes.append(sanitize_name(row[item]))
+        if not any(isinstance(x, list) for x in orden_carpetas) and n3_cols:
+            partes.append(_formatear_nivel_3(row, n3_cols, sep_n3, max_n3))
     else:
-        col_sala = buscar_columna(columnas_raw, ["sala"])
-        col_dia = buscar_columna(columnas_raw, ["dia", "fecha"])
-        if col_sala:
-            partes.append(sanitizar_nombre_carpeta(row[col_sala]))
-        if col_dia:
-            partes.append(sanitizar_nombre_carpeta(row[col_dia]))
+        if col_sala and col_sala in row:
+            partes.append(sanitize_name(row[col_sala]))
+        if col_dia and col_dia in row:
+            val_dia = formatear_dia_valor(row[col_dia]) if formato_dia_nn else row[col_dia]
+            partes.append(sanitize_name(val_dia))
         if n3_cols:
-            valores = [str(row[c]).strip() for c in n3_cols if c in row and str(row[c]).strip()]
-            combinado = sep_n3.join(valores) if valores else "Sin_Especificar"
-            partes.append(sanitizar_nombre_carpeta(combinado, max_len=max_n3))
+            partes.append(_formatear_nivel_3(row, n3_cols, sep_n3, max_n3))
 
     return os.path.join(*partes)
 
 
-def obtener_participantes_fila(row, columnas):
+def obtener_participantes_fila(row, columnas, config=None):
     participantes = []
+    cols_n4 = (config or {}).get("nivel_4_columnas") or []
+    if cols_n4:
+        for c in cols_n4:
+            if c in row:
+                val = str(row[c]).strip()
+                if val and sanitize_name(val) != "_vacio" and val not in participantes:
+                    participantes.append(val)
+        return participantes
+
     for c in columnas:
         nc = norm_col(c)
-        if nc.startswith("participante") or nc.startswith("ponente"):
+        if nc.startswith("participante") or nc.startswith("ponente") or nc.startswith("speaker"):
             val = str(row[c]).strip()
-            if val and val not in participantes:
+            if val and sanitize_name(val) != "_vacio" and val not in participantes:
                 participantes.append(val)
     return participantes
 
@@ -458,8 +530,8 @@ HTML_APP = """<!DOCTYPE html>
             <div class="col-sm-6 col-xl-3">
                 <div class="kpi-card kpi-orange">
                     <div class="kpi-title">Carpeta Sesión (Nivel 3)</div>
-                    <div class="kpi-value">≤ {{ config.max_chars_nivel_3 | default(50) }} Car.</div>
-                    <div class="kpi-sub">Sanitizada + Subcarpetas Ponente</div>
+                    <div class="kpi-value">≤ {{ config.max_chars_nivel_3 | default(50) }} Car./Campo</div>
+                    <div class="kpi-sub">Saneada + Subcarpetas Ponente</div>
                     <svg class="kpi-wave" viewBox="0 0 200 40" preserveAspectRatio="none"><path d="M0,20 L45,28 L85,14 L130,26 L170,15 L200,24 L200,40 L0,40 Z" fill="#ffffff"/></svg>
                 </div>
             </div>
@@ -787,9 +859,10 @@ def index():
     columnas_raw = list(df.columns)
     columnas_ordenadas = ordenar_columnas_solicitadas(columnas_raw)
 
-    col_sala = buscar_columna(columnas_raw, ['sala'])
-    col_dia = buscar_columna(columnas_raw, ['dia', 'fecha'])
+    col_sala = config.get("nivel_1") or buscar_columna(columnas_raw, ['sala'])
+    col_dia = config.get("nivel_2") or buscar_columna(columnas_raw, ['dia', 'fecha'])
     col_titulo = buscar_columna(columnas_raw, ['titulo sesion es', 'titulo sesion', 'titulo de sesion'])
+    formato_dia_nn = bool(config.get("formato_dia_nn", True))
 
     puesto_bloqueado = config.get("_puesto_bloqueado")
     puesto_activo = puesto_bloqueado or ""
@@ -803,11 +876,13 @@ def index():
     for _, row in df.iterrows():
         ruta_sesion = construir_ruta_sesion(row, config, columnas_raw)
         ruta_abs = os.path.join(ruta_activa, ruta_sesion)
-        participantes = obtener_participantes_fila(row, columnas_raw)
+        participantes = obtener_participantes_fila(row, columnas_raw, config)
 
         part_carpetas = []
         for p in participantes:
-            p_san = sanitizar_nombre_carpeta(p)
+            p_san = sanitize_name(p)
+            if p_san == "_vacio":
+                continue
             part_carpetas.append({
                 "nombre": p,
                 "ruta": os.path.join(ruta_sesion, p_san)
@@ -818,10 +893,11 @@ def index():
         if tiene_ppt:
             con_archivo += 1
 
-        sala_val = str(row[col_sala]).strip() if col_sala else ""
-        dia_val = str(row[col_dia]).strip() if col_dia else "Sin Día"
+        sala_val = str(row[col_sala]).strip() if col_sala and col_sala in row else ""
+        raw_dia = row[col_dia] if col_dia and col_dia in row else ""
+        dia_val = formatear_dia_valor(raw_dia) if (col_dia and formato_dia_nn) else (str(raw_dia).strip() or "Sin Día")
         sesion_val = os.path.basename(ruta_sesion)
-        titulo_val = str(row[col_titulo]).strip() if col_titulo else sesion_val
+        titulo_val = str(row[col_titulo]).strip() if col_titulo and col_titulo in row else sesion_val
 
         filas.append({
             "datos": {c: str(row[c]) for c in columnas_ordenadas},
@@ -833,7 +909,7 @@ def index():
             "num_archivos": num_archivos
         })
 
-        if sala_restringida and sala_val.lower() != sala_restringida.lower():
+        if sala_restringida and sanitize_name(sala_val).lower() != sanitize_name(sala_restringida).lower():
             continue
 
         visor_por_dia.setdefault(dia_val, {}).setdefault(sesion_val, []).append({
@@ -890,13 +966,16 @@ def api_crear_carpetas():
         if not os.path.exists(ruta_abs):
             os.makedirs(ruta_abs, exist_ok=True)
             creadas += 1
-        for p in obtener_participantes_fila(row, columnas_raw):
-            p_abs = os.path.join(ruta_abs, sanitizar_nombre_carpeta(p))
+        for p in obtener_participantes_fila(row, columnas_raw, config):
+            p_san = sanitize_name(p)
+            if p_san == "_vacio":
+                continue
+            p_abs = os.path.join(ruta_abs, p_san)
             if not os.path.exists(p_abs):
                 os.makedirs(p_abs, exist_ok=True)
                 creadas += 1
 
-    return jsonify({"ok": True, "mensaje": f"Carpetas de sesión (≤50 car.) y participantes listas ({creadas} nuevas)."})
+    return jsonify({"ok": True, "mensaje": f"Carpetas de sesión (≤50 car./campo) y subcarpetas listas ({creadas} nuevas)."})
 
 
 @app.route('/api/abrir-ruta', methods=['POST'])
@@ -915,8 +994,10 @@ def api_abrir_ruta():
             columnas_raw = list(df.columns)
             for _, row in df.iterrows():
                 if construir_ruta_sesion(row, config, columnas_raw) == ruta_rel:
-                    for p in obtener_participantes_fila(row, columnas_raw):
-                        os.makedirs(os.path.join(ruta_abs, sanitizar_nombre_carpeta(p)), exist_ok=True)
+                    for p in obtener_participantes_fila(row, columnas_raw, config):
+                        p_san = sanitize_name(p)
+                        if p_san != "_vacio":
+                            os.makedirs(os.path.join(ruta_abs, p_san), exist_ok=True)
     elif not os.path.exists(ruta_abs):
         return jsonify({"ok": False, "mensaje": "La carpeta aún no existe en disco."})
 
@@ -943,7 +1024,8 @@ def api_subir_presentacion():
 
     carpeta_destino = os.path.join(ruta_activa, ruta_rel)
     os.makedirs(carpeta_destino, exist_ok=True)
-    nombre_seguro = sanitizar_nombre_carpeta(os.path.splitext(archivo.filename)[0]) + os.path.splitext(archivo.filename)[1]
+    nombre_base, ext = os.path.splitext(archivo.filename)
+    nombre_seguro = sanitize_name(nombre_base) + sanitize_name(ext).replace("_vacio", "")
     archivo.save(os.path.join(carpeta_destino, nombre_seguro))
     return jsonify({"ok": True, "mensaje": f"Presentación '{nombre_seguro}' cargada en {ruta_rel}."})
 
@@ -961,9 +1043,12 @@ def api_buscar_ponente():
 
     for _, row in df.iterrows():
         ruta_sesion = construir_ruta_sesion(row, config, columnas_raw)
-        for p in obtener_participantes_fila(row, columnas_raw):
+        for p in obtener_participantes_fila(row, columnas_raw, config):
             if q in p.lower():
-                ruta_p = os.path.join(ruta_sesion, sanitizar_nombre_carpeta(p))
+                p_san = sanitize_name(p)
+                if p_san == "_vacio":
+                    continue
+                ruta_p = os.path.join(ruta_sesion, p_san)
                 clave = f"{p}||{ruta_p}"
                 if clave not in vistas:
                     vistas.add(clave)

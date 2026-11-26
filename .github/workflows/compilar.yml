@@ -6,32 +6,40 @@ on:
   workflow_dispatch:
 
 jobs:
-  compilar-macos:
-    runs-on: macos-latest
+  compilar-macos-intel:
+    runs-on: macos-15-intel
     steps:
       - name: Descargar código del repositorio
         uses: actions/checkout@v4
 
-      - name: Configurar Python
+      - name: Configurar Python x86_64 (Intel)
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
+          architecture: 'x64'
 
-      - name: Instalar dependencias y empaquetar DMG
+      - name: Instalar dependencias y empaquetar DMG para Mac Intel
         run: |
+          SCRIPT_PATH=$(find . -maxdepth 4 -name "Congreso_App.py" | head -n 1)
+          if [ -z "$SCRIPT_PATH" ]; then
+            echo "ERROR: No se encontró Congreso_App.py en el repositorio."
+            find . -maxdepth 3
+            exit 1
+          fi
+          echo "Compilando $SCRIPT_PATH en arquitectura $(uname -m)..."
           python -m pip install --upgrade pip
           pip install pyinstaller flask pandas openpyxl
-          pyinstaller --noconfirm --windowed --onefile --name "Congreso_App" Congreso_App.py
+          pyinstaller --noconfirm --windowed --onefile --target-architecture x86_64 --name "Congreso_App" "$SCRIPT_PATH"
           mkdir -p staging
           cp -R "dist/Congreso_App.app" staging/
           ln -s /Applications staging/Applications
-          hdiutil create -volname "Congreso_App" -srcfolder staging -ov -format UDZO "Congreso_App_Mac.dmg"
+          hdiutil create -volname "Congreso_App" -srcfolder staging -ov -format UDZO "Congreso_App_Mac_Intel.dmg"
 
-      - name: Publicar DMG de macOS
+      - name: Publicar DMG de macOS Intel
         uses: actions/upload-artifact@v4
         with:
-          name: Congreso_App_macOS
-          path: Congreso_App_Mac.dmg
+          name: Congreso_App_macOS_Intel
+          path: Congreso_App_Mac_Intel.dmg
 
   compilar-windows:
     runs-on: windows-latest
@@ -45,10 +53,17 @@ jobs:
           python-version: '3.11'
 
       - name: Instalar dependencias y empaquetar EXE
+        shell: bash
         run: |
+          SCRIPT_PATH=$(find . -maxdepth 4 -name "Congreso_App.py" | head -n 1)
+          if [ -z "$SCRIPT_PATH" ]; then
+            echo "ERROR: No se encontró Congreso_App.py en el repositorio."
+            find . -maxdepth 3
+            exit 1
+          fi
           python -m pip install --upgrade pip
           pip install pyinstaller flask pandas openpyxl
-          pyinstaller --noconfirm --onefile --name "Congreso_App" Congreso_App.py
+          pyinstaller --noconfirm --onefile --name "Congreso_App" "$SCRIPT_PATH"
 
       - name: Publicar EXE de Windows
         uses: actions/upload-artifact@v4

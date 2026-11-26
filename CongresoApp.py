@@ -48,13 +48,6 @@ def truncate50(s):
     return s if len(s) <= 50 else s[:50]
 
 
-def sanitizar_nombre_carpeta(texto, max_len=None):
-    limpio = sanitize_name(texto)
-    if max_len is not None and len(limpio) > max_len:
-        limpio = sanitize_name(limpio[:max_len])
-    return limpio
-
-
 def formatear_dia_valor(valor, day_choice=0):
     if valor is None or (isinstance(valor, float) and pd.isna(valor)):
         return "_sin_fecha"
@@ -180,8 +173,6 @@ def construir_ruta_sesion(row, config, columnas_raw):
     if orden_carpetas:
         for item in orden_carpetas:
             if isinstance(item, list):
-                if item and item == config.get("nivel_4_columnas"):
-                    continue
                 partes.append(_formatear_nivel_3(row, item if item else n3_cols, sep_n3, max_n3))
             elif isinstance(item, str) and item in row:
                 if col_dia and item == col_dia and formato_dia_nn:
@@ -202,17 +193,8 @@ def construir_ruta_sesion(row, config, columnas_raw):
     return os.path.join(*partes)
 
 
-def obtener_participantes_fila(row, columnas, config=None):
+def obtener_participantes_fila(row, columnas):
     participantes = []
-    cols_n4 = (config or {}).get("nivel_4_columnas") or []
-    if cols_n4:
-        for c in cols_n4:
-            if c in row:
-                val = str(row[c]).strip()
-                if val and sanitize_name(val) != "_vacio" and val not in participantes:
-                    participantes.append(val)
-        return participantes
-
     for c in columnas:
         nc = norm_col(c)
         if nc.startswith("participante") or nc.startswith("ponente") or nc.startswith("speaker"):
@@ -409,19 +391,21 @@ HTML_APP = """<!DOCTYPE html>
         .badge-ppt-ok { background: rgba(2, 150, 102, 0.2); color: #48d6a8; border: 1px solid rgba(72, 214, 168, 0.35); }
         .badge-ppt-wait { background: rgba(247, 106, 45, 0.2); color: #efa65f; border: 1px solid rgba(239, 166, 95, 0.35); }
         .ponente-link {
-            display: inline-block;
-            background: rgba(1, 98, 232, 0.2);
-            border: 1px solid rgba(0, 185, 255, 0.38);
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            background: rgba(1, 98, 232, 0.22);
+            border: 1px solid rgba(0, 185, 255, 0.42);
             color: #7dd3fc;
             border-radius: 5px;
             padding: 3px 8px;
             font-size: 0.78rem;
-            margin: 2px 3px 2px 0;
+            margin: 2px 4px 2px 0;
             cursor: pointer;
             text-decoration: none;
             white-space: nowrap;
         }
-        .ponente-link:hover { background: rgba(0, 185, 255, 0.35); color: #fff; }
+        .ponente-link:hover { background: rgba(0, 185, 255, 0.38); color: #fff; }
     </style>
 </head>
 <body>
@@ -531,7 +515,7 @@ HTML_APP = """<!DOCTYPE html>
                 <div class="kpi-card kpi-orange">
                     <div class="kpi-title">Carpeta Sesión (Nivel 3)</div>
                     <div class="kpi-value">≤ {{ config.max_chars_nivel_3 | default(50) }} Car./Campo</div>
-                    <div class="kpi-sub">Saneada + Subcarpetas Ponente</div>
+                    <div class="kpi-sub">Saneada + Subcarpeta / Participante</div>
                     <svg class="kpi-wave" viewBox="0 0 200 40" preserveAspectRatio="none"><path d="M0,20 L45,28 L85,14 L130,26 L170,15 L200,24 L200,40 L0,40 Z" fill="#ffffff"/></svg>
                 </div>
             </div>
@@ -543,13 +527,13 @@ HTML_APP = """<!DOCTYPE html>
         <div id="vistaTabla" class="valex-card">
             <div class="valex-card-header">
                 <div>
-                    <h5 class="valex-card-title">Programación y Carpetas de Ponentes</h5>
-                    <div class="valex-card-subtitle">Abrir Carpeta · Estado · Hora Inicio · Hora Fin · Título Sesión · Sala · Día · ID · Resto</div>
+                    <h5 class="valex-card-title">Programación y Subcarpetas por Participante</h5>
+                    <div class="valex-card-subtitle">Abrir Carpeta Participante · Abrir Sesión · Estado · Hora Inicio · Hora Fin · Título Sesión · Sala · Día · ID</div>
                 </div>
                 <div class="d-flex gap-2">
                     {% if es_admin %}
                         <button class="btn btn-sm btn-valex-green px-3" onclick="crearArbolCarpetas()">
-                            <i class="bi bi-folder-plus me-1"></i> Generar Todas las Carpetas PPT
+                            <i class="bi bi-folder-plus me-1"></i> Generar Carpetas y Subcarpetas
                         </button>
                     {% endif %}
                     <button class="btn btn-sm btn-valex-blue px-3" onclick="limpiarFiltros()">
@@ -562,14 +546,17 @@ HTML_APP = """<!DOCTYPE html>
                 <table class="table table-valex" id="tablaPonencias">
                     <thead>
                         <tr class="header-titles">
-                            <th>Abrir Carpeta</th>
+                            <th>Abrir Carpeta Participante</th>
+                            <th>Sesión</th>
                             <th>Estado de Carga</th>
                             {% for col in columnas_ordenadas %}
                                 <th>{{ col }}</th>
                             {% endfor %}
-                            <th>Carpetas por Ponente</th>
                         </tr>
                         <tr class="header-filters">
+                            <th>
+                                <input type="text" id="flt_ponente_col" class="form-control form-control-sm flt-input" placeholder="Filtrar participante..." onkeyup="aplicarFiltros()">
+                            </th>
                             <th><span class="text-secondary small">Acción</span></th>
                             <th>
                                 <select id="flt_estado" class="form-select form-select-sm" style="min-width:110px;" onchange="aplicarFiltros()">
@@ -583,9 +570,6 @@ HTML_APP = """<!DOCTYPE html>
                                     <input type="text" class="form-control form-control-sm flt-input flt-col" data-idx="{{ loop.index0 }}" placeholder="Filtrar {{ col }}..." onkeyup="aplicarFiltros()">
                                 </th>
                             {% endfor %}
-                            <th>
-                                <input type="text" id="flt_ponente_col" class="form-control form-control-sm flt-input" placeholder="Filtrar ponente..." onkeyup="aplicarFiltros()">
-                            </th>
                         </tr>
                     </thead>
                     <tbody>
@@ -599,10 +583,23 @@ HTML_APP = """<!DOCTYPE html>
                             {% endfor %}
                         >
                             <td>
+                                {% if fila.participantes_carpetas %}
+                                    <div class="d-flex flex-wrap gap-1">
+                                        {% for p in fila.participantes_carpetas %}
+                                            <button type="button" class="ponente-link" onclick='abrirRuta({{ p.ruta | tojson }}, {{ "true" if es_admin else "false" }})' title="Abrir carpeta de {{ p.nombre }}">
+                                                <i class="bi bi-folder2-open"></i> {{ p.nombre }}
+                                            </button>
+                                        {% endfor %}
+                                    </div>
+                                {% else %}
+                                    <span class="text-secondary small">—</span>
+                                {% endif %}
+                            </td>
+                            <td>
                                 {% if es_admin %}
                                     <div class="d-flex flex-nowrap gap-1 align-items-center">
-                                        <button class="btn btn-sm btn-valex-blue" onclick='abrirRuta({{ fila.ruta_relativa | tojson }}, true)' title="Abrir carpeta con subcarpetas de ponentes">
-                                            <i class="bi bi-folder2-open"></i> Abrir
+                                        <button class="btn btn-sm btn-valex-blue" onclick='abrirRuta({{ fila.ruta_relativa | tojson }}, true)' title="Abrir carpeta de la sesión">
+                                            <i class="bi bi-folder2-open"></i> Sesión
                                         </button>
                                         <label class="btn btn-sm btn-valex-green mb-0" title="Cargar archivo en esta sesión">
                                             <i class="bi bi-upload"></i>
@@ -625,13 +622,6 @@ HTML_APP = """<!DOCTYPE html>
                             {% for col in columnas_ordenadas %}
                                 <td>{{ fila.datos[col] }}</td>
                             {% endfor %}
-                            <td>
-                                {% for p in fila.participantes_carpetas %}
-                                    <span class="ponente-link" onclick='abrirRuta({{ p.ruta | tojson }}, {{ "true" if es_admin else "false" }})' title="Abrir carpeta de {{ p.nombre }}">
-                                        <i class="bi bi-person-folder me-1"></i>{{ p.nombre }}
-                                    </span>
-                                {% endfor %}
-                            </td>
                         </tr>
                         {% endfor %}
                     </tbody>
@@ -816,7 +806,7 @@ function buscarPonente() {
 function irACarpetaPonente() {
     const q = document.getElementById('buscadorPonente').value.trim();
     if (!q) {
-        mostrarAlerta('Escribe el nombre de un ponente o participante para abrir su carpeta.', false);
+        mostrarAlerta('Escribe el nombre de un ponente o participante para abrir su subcarpeta.', false);
         return;
     }
     fetch('/api/buscar-ponente?q=' + encodeURIComponent(q))
@@ -825,16 +815,16 @@ function irACarpetaPonente() {
             const box = document.getElementById('resultadosPonente');
             if (!data.coincidencias || data.coincidencias.length === 0) {
                 box.classList.remove('d-none');
-                box.innerHTML = `<span class="text-warning"><i class="bi bi-search me-1"></i> No se encontraron carpetas para "${q}".</span>`;
+                box.innerHTML = `<span class="text-warning"><i class="bi bi-search me-1"></i> No se encontraron subcarpetas para "${q}".</span>`;
                 return;
             }
             if (data.coincidencias.length === 1) {
                 abrirRuta(data.coincidencias[0].ruta, true);
-                mostrarAlerta(`Abierta carpeta de ${data.coincidencias[0].ponente}: ${data.coincidencias[0].ruta}`);
+                mostrarAlerta(`Abierta subcarpeta de ${data.coincidencias[0].ponente}: ${data.coincidencias[0].ruta}`);
                 box.classList.add('d-none');
             } else {
                 box.classList.remove('d-none');
-                box.innerHTML = `<div class="small text-info fw-bold mb-2">Se encontraron ${data.coincidencias.length} carpetas para "${q}":</div>` +
+                box.innerHTML = `<div class="small text-info fw-bold mb-2">Se encontraron ${data.coincidencias.length} subcarpetas para "${q}":</div>` +
                     data.coincidencias.map(c =>
                         `<span class="ponente-link" onclick='abrirRuta(${JSON.stringify(c.ruta)}, true)'><i class="bi bi-folder2-open me-1"></i>${c.ponente} — <small>${c.ruta}</small></span>`
                     ).join('');
@@ -876,7 +866,7 @@ def index():
     for _, row in df.iterrows():
         ruta_sesion = construir_ruta_sesion(row, config, columnas_raw)
         ruta_abs = os.path.join(ruta_activa, ruta_sesion)
-        participantes = obtener_participantes_fila(row, columnas_raw, config)
+        participantes = obtener_participantes_fila(row, columnas_raw)
 
         part_carpetas = []
         for p in participantes:
@@ -966,7 +956,7 @@ def api_crear_carpetas():
         if not os.path.exists(ruta_abs):
             os.makedirs(ruta_abs, exist_ok=True)
             creadas += 1
-        for p in obtener_participantes_fila(row, columnas_raw, config):
+        for p in obtener_participantes_fila(row, columnas_raw):
             p_san = sanitize_name(p)
             if p_san == "_vacio":
                 continue
@@ -975,7 +965,7 @@ def api_crear_carpetas():
                 os.makedirs(p_abs, exist_ok=True)
                 creadas += 1
 
-    return jsonify({"ok": True, "mensaje": f"Carpetas de sesión (≤50 car./campo) y subcarpetas listas ({creadas} nuevas)."})
+    return jsonify({"ok": True, "mensaje": f"Carpetas de sesión y subcarpetas por participante listas ({creadas} nuevas)."})
 
 
 @app.route('/api/abrir-ruta', methods=['POST'])
@@ -994,7 +984,7 @@ def api_abrir_ruta():
             columnas_raw = list(df.columns)
             for _, row in df.iterrows():
                 if construir_ruta_sesion(row, config, columnas_raw) == ruta_rel:
-                    for p in obtener_participantes_fila(row, columnas_raw, config):
+                    for p in obtener_participantes_fila(row, columnas_raw):
                         p_san = sanitize_name(p)
                         if p_san != "_vacio":
                             os.makedirs(os.path.join(ruta_abs, p_san), exist_ok=True)
@@ -1043,7 +1033,7 @@ def api_buscar_ponente():
 
     for _, row in df.iterrows():
         ruta_sesion = construir_ruta_sesion(row, config, columnas_raw)
-        for p in obtener_participantes_fila(row, columnas_raw, config):
+        for p in obtener_participantes_fila(row, columnas_raw):
             if q in p.lower():
                 p_san = sanitize_name(p)
                 if p_san == "_vacio":

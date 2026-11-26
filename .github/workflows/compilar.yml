@@ -18,7 +18,7 @@ jobs:
           python-version: '3.11'
           architecture: 'x64'
 
-      - name: Compilar y empaquetar apps en ZIP nativo macOS
+      - name: Compilar apps y crear DMG compatible con Mac Intel
         run: |
           APP_PATH=$(find . -maxdepth 4 -iname "Congreso_App.py" | head -n 1)
           CFG_PATH=$(find . -maxdepth 4 -iname "Configurador_Congreso.py" | head -n 1)
@@ -40,17 +40,19 @@ jobs:
           codesign --force --deep --sign - "dist/Congreso_App.app"
           codesign --force --deep --sign - "dist/Configurador_Congreso.app"
 
-          mkdir -p paquete_mac
-          cp -R "dist/Congreso_App.app" paquete_mac/
-          cp -R "dist/Configurador_Congreso.app" paquete_mac/
+          rm -rf carpeta_dmg
+          mkdir -p carpeta_dmg
+          cp -R "dist/Congreso_App.app" carpeta_dmg/
+          cp -R "dist/Configurador_Congreso.app" carpeta_dmg/
+          ln -s /Applications carpeta_dmg/Applications
 
-          ditto -c -k --sequesterRsrc --keepParent "paquete_mac" "Sistema_Congreso_Mac_Intel.zip"
+          hdiutil create -volname "Sistema_Congreso_Intel" -srcfolder carpeta_dmg -ov -format UDRO "Sistema_Congreso_Intel.dmg"
 
-      - name: Publicar paquete macOS Intel
+      - name: Publicar DMG de macOS Intel
         uses: actions/upload-artifact@v4
         with:
-          name: Sistema_Congreso_Mac_Intel
-          path: Sistema_Congreso_Mac_Intel.zip
+          name: Sistema_Congreso_Intel_DMG
+          path: Sistema_Congreso_Intel.dmg
 
   compilar-windows:
     runs-on: windows-latest
@@ -63,7 +65,7 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: Compilar y empaquetar apps en ZIP Windows
+      - name: Compilar apps en carpeta para Windows
         shell: bash
         run: |
           APP_PATH=$(find . -maxdepth 4 -iname "Congreso_App.py" | head -n 1)

@@ -7,10 +7,82 @@ import platform
 import threading
 import subprocess
 import webbrowser
+import datetime as dt
 import pandas as pd
 from flask import Flask, render_template_string, request
 
 SISTEMA = platform.system()
+
+INVALID_CHARS = set('<>:"/\\|?*') | {chr(i) for i in range(32)}
+RESERVED = (
+    {"CON", "PRN", "AUX", "NUL"}
+    | {f"COM{i}" for i in range(1, 10)}
+    | {f"LPT{i}" for i in range(1, 10)}
+)
+MAX_NAME_BYTES = 240
+
+
+def _cut_bytes(s, n=MAX_NAME_BYTES):
+    b = s.encode("utf-8")
+    if len(b) <= n:
+        return s
+    return b[:n].decode("utf-8", errors="ignore")
+
+
+def sanitize_name(s):
+    if s is None or (isinstance(s, float) and pd.isna(s)):
+        return "_vacio"
+    val = str(s)
+    clean = "".join(" " if ch in INVALID_CHARS else ch for ch in val)
+    clean = re.sub(r"\s+", " ", clean).strip()
+    clean = clean.rstrip(". ")
+    if clean.upper() in RESERVED:
+        clean += "_"
+    clean = _cut_bytes(clean, MAX_NAME_BYTES).rstrip(". ").strip()
+    return clean if clean else "_vacio"
+
+
+def truncate50(s):
+    if s is None:
+        return ""
+    s = str(s)
+    return s if len(s) <= 50 else s[:50]
+
+
+def sanitizar_nombre_carpeta(texto, max_len=None):
+    limpio = sanitize_name(texto)
+    if max_len is not None and len(limpio) > max_len:
+        limpio = sanitize_name(limpio[:max_len])
+    return limpio
+
+
+def formatear_dia_valor(valor, day_choice=0):
+    if valor is None or (isinstance(valor, float) and pd.isna(valor)):
+        return "_sin_fecha"
+    if isinstance(valor, (dt.datetime, dt.date)):
+        return f"DIA {valor.day:02d}"
+    texto = str(valor).strip().strip("\"' ").strip()
+    if not texto:
+        return "_sin_fecha"
+    if re.fullmatch(r"[0-9]{1,2}", texto):
+        d = int(texto)
+        return f"DIA {d:02d}" if 1 <= d <= 31 else "DIA " + sanitize_name(texto)
+    partes = [p for p in re.split(r"[/\-.\s]+", texto) if p != ""]
+    if len(partes) == 3 and all(re.fullmatch(r"[0-9]{1,4}", p) for p in partes):
+        idx = day_choice if 0 <= day_choice < 3 else 0
+        try:
+            d = int(partes[idx])
+            if 1 <= d <= 31:
+                return f"DIA {d:02d}"
+        except ValueError:
+            pass
+    for fmt in ("%Y-%m-%d", "%d/%m/%Y", "%Y%m%d", "%d %B %Y", "%B %d, %Y", "%d %b %Y"):
+        try:
+            parsed = dt.datetime.strptime(texto, fmt)
+            return f"DIA {parsed.day:02d}"
+        except ValueError:
+            continue
+    return "DIA " + sanitize_name(texto)
 
 
 def obtener_ruta_base():
@@ -22,25 +94,6 @@ def obtener_ruta_base():
             return os.path.join(os.path.expanduser("~"), "Desktop")
         return ruta
     return os.path.abspath(os.path.dirname(__file__))
-
-
-def sanitizar_nombre_carpeta(texto, max_len=None):
-    if texto is None or (isinstance(texto, float) and pd.isna(texto)):
-        valor = "Sin_Especificar"
-    else:
-        valor = str(texto).strip()
-
-    valor = re.sub(r'[\x00-\x1f\x7f]', '', valor)
-    valor = re.sub(r'[\\/:*?"<>|]+', '-', valor)
-    valor = re.sub(r'\s+', ' ', valor).strip(' .-_')
-
-    if not valor:
-        valor = "Sin_Especificar"
-
-    if max_len is not None and len(valor) > max_len:
-        valor = valor[:max_len].rstrip(' .-_') or "Sesion"
-
-    return valor
 
 
 app = Flask(__name__)
@@ -235,14 +288,14 @@ HTML_CONFIG = """<!DOCTYPE html>
 
     <nav class="valex-subnav">
         <span class="subnav-item active"><i class="bi bi-sliders"></i> Configurador USB</span>
-        <span class="subnav-item"><i class="bi bi-folder-symlink"></i> Nivel 3 (≤50 car.) + Participantes</span>
+        <span class="subnav-item"><i class="bi bi-folder-symlink"></i> Nivel 1 (Sala) · Nivel 2 (DIA NN) · Nivel 3 (≤50c/campo) · Nivel 4</span>
     </nav>
 
     <div class="container-fluid px-4 pt-4" style="max-width: 1280px;">
         <div class="mb-4">
             <h4 class="fw-bold mb-1">Configurador de Paquete USB</h4>
             <p class="mb-0" style="color: var(--text-muted); font-size: 0.88rem;">
-                Nivel 3 por defecto con <strong>Hora inicio</strong>, <strong>Hora fin</strong>, <strong>Título sesión</strong>, <strong>Sala</strong> y <strong>Día</strong> · Sanitizado, máx. <strong>50 caracteres</strong> y subcarpeta por participante
+                Estructura integrada: <strong>Sala</strong> → <strong>DIA NN</strong> → <strong>Combinación ordenada (≤50 car./campo)</strong> → <strong>Subcarpetas de participantes</strong>, todo saneado.
             </p>
         </div>
 
@@ -265,7 +318,7 @@ HTML_CONFIG = """<!DOCTYPE html>
             </div>
             <div class="col-sm-6 col-xl-3">
                 <div class="kpi-card kpi-green">
-                    <div class="kpi-title">Nivel 3 (Máx. 50 car.)</div>
+                    <div class="kpi-title">Nivel 3 (≤50 car./campo)</div>
                     <div class="kpi-value" id="kpiNivel3Cols">5 Campos</div>
                     <div class="kpi-sub" id="kpiNivel3Resumen">Hora inicio · Hora fin · Título sesión · Sala · Día</div>
                     <svg class="kpi-wave" viewBox="0 0 200 40" preserveAspectRatio="none"><path d="M0,32 L35,18 L75,26 L115,10 L155,20 L200,8 L200,40 L0,40 Z" fill="#ffffff"/></svg>
@@ -300,7 +353,7 @@ HTML_CONFIG = """<!DOCTYPE html>
                         <div class="valex-card-header">
                             <div>
                                 <h5 class="valex-card-title">Parámetros del Congreso</h5>
-                                <div class="valex-card-subtitle">Configura las columnas y el nombre sanitizado de sesión (máx. 50 caracteres)</div>
+                                <div class="valex-card-subtitle">Orden exacto de campos, formato DIA NN, truncado de 50 caracteres y subcarpetas</div>
                             </div>
                             <i class="bi bi-sliders text-info fs-5"></i>
                         </div>
@@ -326,7 +379,7 @@ HTML_CONFIG = """<!DOCTYPE html>
                                 <div class="row g-3 mb-3">
                                     <div class="col-md-3">
                                         <div class="nivel-box">
-                                            <small class="d-block text-info fw-semibold mb-1" style="font-size:0.74rem;">NIVEL 1 (Raíz)</small>
+                                            <small class="d-block text-info fw-semibold mb-1" style="font-size:0.74rem;">NIVEL 1 · SALA</small>
                                             <select name="nivel_1" id="nivel_1" class="form-select form-select-sm" onchange="actualizarVistaPrevia()">
                                                 <option value="SALA">SALA</option>
                                             </select>
@@ -334,15 +387,19 @@ HTML_CONFIG = """<!DOCTYPE html>
                                     </div>
                                     <div class="col-md-3">
                                         <div class="nivel-box">
-                                            <small class="d-block text-info fw-semibold mb-1" style="font-size:0.74rem;">NIVEL 2</small>
+                                            <small class="d-block text-info fw-semibold mb-1" style="font-size:0.74rem;">NIVEL 2 · FECHA (DIA NN)</small>
                                             <select name="nivel_2" id="nivel_2" class="form-select form-select-sm" onchange="actualizarVistaPrevia()">
                                                 <option value="DÍA">DÍA</option>
                                             </select>
+                                            <div class="form-check mt-2">
+                                                <input class="form-check-input" type="checkbox" name="formato_dia_nn" id="formato_dia_nn" value="1" checked onchange="actualizarVistaPrevia()">
+                                                <label class="form-check-label small" for="formato_dia_nn">Formato DIA NN</label>
+                                            </div>
                                         </div>
                                     </div>
                                     <div class="col-md-3">
                                         <div class="nivel-box" style="border-color: rgba(0, 185, 255, 0.35);">
-                                            <small class="d-block text-info fw-semibold mb-1" style="font-size:0.74rem;">NIVEL 3 (Sesión · ≤50 car.)</small>
+                                            <small class="d-block text-info fw-semibold mb-1" style="font-size:0.74rem;">NIVEL 3 · ORDEN (≤50c/campo)</small>
                                             <div id="nivel3Checks" class="multi-cols-box mb-2">
                                                 <div class="form-check">
                                                     <input class="form-check-input nivel3-chk" type="checkbox" name="nivel_3_cols" value="HORA INICIO" id="n3_def_1" checked onchange="actualizarVistaPrevia()">
@@ -371,18 +428,21 @@ HTML_CONFIG = """<!DOCTYPE html>
                                     </div>
                                     <div class="col-md-3">
                                         <div class="nivel-box">
-                                            <small class="d-block text-info fw-semibold mb-1" style="font-size:0.74rem;">NIVEL 4 (Participante)</small>
-                                            <select name="nivel_4" id="nivel_4" class="form-select form-select-sm" onchange="actualizarVistaPrevia()">
-                                                <option value="PARTICIPANTE 1">PARTICIPANTE 1</option>
-                                            </select>
-                                            <small class="d-block text-secondary mt-2" style="font-size:0.7rem;">Además se crean carpetas para cada participante detectado.</small>
+                                            <small class="d-block text-info fw-semibold mb-1" style="font-size:0.74rem;">NIVEL 4 · SUBCARPETAS</small>
+                                            <div id="nivel4Checks" class="multi-cols-box">
+                                                <div class="form-check">
+                                                    <input class="form-check-input nivel4-chk" type="checkbox" name="nivel_4_cols" value="PARTICIPANTE 1" id="n4_def_1" checked onchange="actualizarVistaPrevia()">
+                                                    <label class="form-check-label small" for="n4_def_1">PARTICIPANTE 1</label>
+                                                </div>
+                                            </div>
+                                            <small class="d-block text-secondary mt-2" style="font-size:0.7rem;">Crea subcarpeta saneada por cada campo marcado/participante.</small>
                                         </div>
                                     </div>
                                 </div>
 
                                 <div class="ruta-preview" id="vistaPrevia">
                                     <i class="bi bi-folder-fill text-warning mt-1"></i>
-                                    <span>PPT / SALA / DÍA / [HORA INICIO - HORA FIN - TÍTULO SESIÓN - SALA - DÍA · ≤50 car.] / [Carpeta por Participante] / archivo.pptx</span>
+                                    <span>PPT / [SALA saneada] / [DIA NN] / [Campo1(≤50) - Campo2(≤50)... saneado] / [Subcarpetas Nivel 4 / Participante saneado] / archivo.pptx</span>
                                 </div>
                             </div>
 
@@ -412,11 +472,12 @@ HTML_CONFIG = """<!DOCTYPE html>
                                 <span style="color: var(--text-muted); font-size: 0.82rem;">Sube el Excel para ver las salas aquí.</span>
                             </div>
                             <hr style="border-color: var(--border-color);">
-                            <p class="small mb-2 text-white fw-semibold">Reglas aplicadas automáticamente:</p>
+                            <p class="small mb-2 text-white fw-semibold">Reglas integradas:</p>
                             <ul class="small mb-0 ps-3" style="color: var(--text-muted);">
-                                <li>Sanitización de caracteres especiales en carpetas.</li>
-                                <li>Nivel 3 truncado a un máximo de <strong>50 caracteres</strong>.</li>
-                                <li>Carpeta individual por cada participante de la sesión.</li>
+                                <li>Sanitización estricta (caracteres inválidos, reservados, bytes y espacios).</li>
+                                <li>Nivel 2 formateado como <strong>DIA NN</strong> si está activo.</li>
+                                <li>Nivel 3 trunca cada campo a <strong>50 caracteres</strong> en el orden elegido.</li>
+                                <li>Nivel 4 genera subcarpetas saneadas respetando columnas/participantes.</li>
                             </ul>
                         </div>
                     </div>
@@ -485,8 +546,7 @@ function leerColumnasExcel(input) {
 function rellenarDesplegables(columnas) {
     const selectores = [
         { id: 'nivel_1', claves: ['sala'] },
-        { id: 'nivel_2', claves: ['dia', 'fecha'] },
-        { id: 'nivel_4', claves: ['participante 1', 'participante', 'ponente', 'ponentes'] }
+        { id: 'nivel_2', claves: ['dia', 'fecha'] }
     ];
 
     selectores.forEach(sel => {
@@ -524,33 +584,50 @@ function rellenarDesplegables(columnas) {
         n3Container.querySelector('.nivel3-chk').checked = true;
     }
 
+    const n4Container = document.getElementById('nivel4Checks');
+    let marcadaN4 = false;
+    n4Container.innerHTML = columnas.map((col, idx) => {
+        const colNorm = normalizar(col);
+        const esPart = colNorm.startsWith('participante') || colNorm.startsWith('ponente') || colNorm.startsWith('speaker');
+        if (esPart) marcadaN4 = true;
+        return `
+            <div class="form-check">
+                <input class="form-check-input nivel4-chk" type="checkbox" name="nivel_4_cols" value="${col.replace(/"/g, '&quot;')}" id="n4_${idx}" ${esPart ? 'checked' : ''} onchange="actualizarVistaPrevia()">
+                <label class="form-check-label small" for="n4_${idx}">${col}</label>
+            </div>
+        `;
+    }).join('');
+
+    if (!marcadaN4 && n4Container.querySelector('.nivel4-chk')) {
+        n4Container.querySelector('.nivel4-chk').checked = true;
+    }
+
     actualizarVistaPrevia();
 }
 
 function obtenerNivel3Seleccionado() {
     const cols = Array.from(document.querySelectorAll('.nivel3-chk:checked')).map(chk => chk.value);
     const sep = document.getElementById('separador_nivel_3').value;
-    let texto = cols.join(sep);
-    if (texto.length > 50) {
-        texto = texto.substring(0, 50) + '…';
-    }
+    const partesTruncadas = cols.map(c => `[${c}(≤50)]`);
+    const texto = partesTruncadas.join(sep);
     return { cols, sep, texto };
 }
 
 function actualizarVistaPrevia() {
     const n1 = document.getElementById('nivel_1').value;
     const n2 = document.getElementById('nivel_2').value;
+    const diaNN = document.getElementById('formato_dia_nn').checked;
     const n3 = obtenerNivel3Seleccionado();
-    const n4 = document.getElementById('nivel_4').value;
+    const n4Cols = Array.from(document.querySelectorAll('.nivel4-chk:checked')).map(chk => chk.value);
 
     document.getElementById('kpiNivel3Cols').textContent = n3.cols.length + (n3.cols.length === 1 ? ' Campo' : ' Campos');
     document.getElementById('kpiNivel3Resumen').textContent = n3.cols.length > 0 ? n3.cols.join(' · ') : 'Omitido';
 
     const partes = ['PPT'];
     if (n1) partes.push(n1);
-    if (n2) partes.push(n2);
-    if (n3.cols.length > 0) partes.push(`[${n3.texto} · ≤50 car.]`);
-    partes.push(n4 ? `[Participantes / ${n4}]` : '[Carpeta por Participante]');
+    if (n2) partes.push(diaNN ? `DIA NN (${n2})` : n2);
+    if (n3.cols.length > 0) partes.push(n3.texto);
+    partes.push(n4Cols.length > 0 ? `[Subcarpetas: ${n4Cols.join(', ')}]` : '[Subcarpetas Participantes]');
     partes.push('archivo.pptx');
 
     document.getElementById('vistaPrevia').innerHTML = `<i class="bi bi-folder-fill text-warning mt-1"></i><span>${partes.join(' / ')}</span>`;
@@ -584,31 +661,36 @@ def index():
 
                 col_sala = next((c for c in df.columns if re.sub(r'[^a-z0-9]+', '', str(c).lower()) == 'sala'), None)
                 if col_sala:
-                    salas = sorted(list(set(sanitizar_nombre_carpeta(s) for s in df[col_sala].dropna() if str(s).strip())))
+                    salas = sorted(list(set(sanitize_name(s) for s in df[col_sala].dropna() if str(s).strip())))
                     equipos.extend(salas)
 
-                extras = [sanitizar_nombre_carpeta(l) for l in request.form.get('equipos_extra', '').splitlines() if l.strip()]
+                extras = [sanitize_name(l) for l in request.form.get('equipos_extra', '').splitlines() if l.strip()]
                 for ex in extras:
                     if ex not in equipos:
                         equipos.append(ex)
 
                 n1 = request.form.get('nivel_1', '').strip()
                 n2 = request.form.get('nivel_2', '').strip()
+                formato_dia_nn = bool(request.form.get('formato_dia_nn'))
                 n3_cols = [c.strip() for c in request.form.getlist('nivel_3_cols') if c.strip()]
                 sep_n3 = request.form.get('separador_nivel_3', ' - ')
-                n4 = request.form.get('nivel_4', '').strip()
+                n4_cols = [c.strip() for c in request.form.getlist('nivel_4_cols') if c.strip()]
 
                 orden_carpetas = []
-                for item in [n1, n2, n3_cols if n3_cols else "", n4]:
+                for item in [n1, n2, n3_cols if n3_cols else "", n4_cols if n4_cols else ""]:
                     if item and item not in orden_carpetas:
                         orden_carpetas.append(item)
 
                 config_data = {
-                    "workgroup": sanitizar_nombre_carpeta(request.form.get('workgroup', 'CONGRESO').strip().upper(), max_len=15),
+                    "workgroup": sanitize_name(request.form.get('workgroup', 'CONGRESO').strip().upper())[:15],
                     "orden_carpetas": orden_carpetas,
+                    "nivel_1": n1,
+                    "nivel_2": n2,
+                    "formato_dia_nn": formato_dia_nn,
                     "nivel_3_columnas": n3_cols,
                     "separador_nivel_3": sep_n3,
                     "max_chars_nivel_3": 50,
+                    "nivel_4_columnas": n4_cols,
                     "equipos": equipos
                 }
 

@@ -1,66 +1,57 @@
-name: Compilar Ejecutables Congreso (Windows EXE + Mac DMG)
+name: Compilar Congreso_App
 
 on:
-  workflow_dispatch:
   push:
-    branches: [ main, master ]
+    branches: [ "main", "master" ]
+  workflow_dispatch:
 
 jobs:
-  build-windows:
-    runs-on: windows-latest
+  compilar-macos:
+    runs-on: macos-latest
     steps:
-      - name: Descargar código
+      - name: Descargar código del repositorio
         uses: actions/checkout@v4
 
-      - name: Configurar Python 3.11
+      - name: Configurar Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
 
-      - name: Instalar dependencias
+      - name: Instalar dependencias y empaquetar DMG
         run: |
-          pip install flask pandas openpyxl requests pyinstaller
+          python -m pip install --upgrade pip
+          pip install pyinstaller flask pandas openpyxl
+          pyinstaller --noconfirm --windowed --onefile --name "Congreso_App" Congreso_App.py
+          mkdir -p staging
+          cp -R "dist/Congreso_App.app" staging/
+          ln -s /Applications staging/Applications
+          hdiutil create -volname "Congreso_App" -srcfolder staging -ov -format UDZO "Congreso_App_Mac.dmg"
 
-      - name: Compilar EXEs para Windows
-        run: |
-          pyinstaller --onefile --windowed --name CongresoApp CongresoApp.py
-          pyinstaller --onefile --windowed --name Configurador_Congreso Configurador_Congreso.py
-
-      - name: Subir artefacto Windows
+      - name: Publicar DMG de macOS
         uses: actions/upload-artifact@v4
         with:
-          name: Sistema_Congreso_Windows_EXE
-          path: |
-            dist/CongresoApp.exe
-            dist/Configurador_Congreso.exe
+          name: Congreso_App_macOS
+          path: Congreso_App_Mac.dmg
 
-  build-macos-intel:
-    runs-on: macos-latest
+  compilar-windows:
+    runs-on: windows-latest
     steps:
-      - name: Descargar código
+      - name: Descargar código del repositorio
         uses: actions/checkout@v4
 
-      - name: Instalar Rosetta 2 para compilación Intel
-        run: sudo softwareupdate --install-rosetta --agree-to-license
+      - name: Configurar Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
 
-      - name: Instalar dependencias y compilar en arquitectura Intel (x86_64)
+      - name: Instalar dependencias y empaquetar EXE
         run: |
-          arch -x86_64 /usr/bin/python3 -m venv venv_intel
-          arch -x86_64 ./venv_intel/bin/pip install --upgrade pip
-          arch -x86_64 ./venv_intel/bin/pip install flask pandas openpyxl requests pyinstaller
-          arch -x86_64 ./venv_intel/bin/pyinstaller --windowed --name CongresoApp CongresoApp.py
-          arch -x86_64 ./venv_intel/bin/pyinstaller --windowed --name Configurador_Congreso Configurador_Congreso.py
+          python -m pip install --upgrade pip
+          pip install pyinstaller flask pandas openpyxl
+          pyinstaller --noconfirm --onefile --name "Congreso_App" Congreso_App.py
 
-      - name: Crear imagen de disco DMG (hdiutil)
-        run: |
-          mkdir -p dmg_staging
-          cp -R dist/CongresoApp.app dmg_staging/
-          cp -R dist/Configurador_Congreso.app dmg_staging/
-          ln -s /Applications dmg_staging/Applications
-          hdiutil create -volname "Sistema Congreso" -srcfolder dmg_staging -ov -format UDZO dist/Sistema_Congreso_Mac_Intel.dmg
-
-      - name: Subir artefacto Mac DMG
+      - name: Publicar EXE de Windows
         uses: actions/upload-artifact@v4
         with:
-          name: Sistema_Congreso_Mac_Intel_DMG
-          path: dist/Sistema_Congreso_Mac_Intel.dmg
+          name: Congreso_App_Windows
+          path: dist/Congreso_App.exe

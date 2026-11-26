@@ -1,4 +1,4 @@
-name: Compilar Congreso_App
+name: Compilar Congreso_App y Configurador
 
 on:
   push:
@@ -20,26 +20,35 @@ jobs:
 
       - name: Instalar dependencias y empaquetar DMG para Mac Intel
         run: |
-          SCRIPT_PATH=$(find . -maxdepth 4 -name "Congreso_App.py" | head -n 1)
-          if [ -z "$SCRIPT_PATH" ]; then
-            echo "ERROR: No se encontró Congreso_App.py en el repositorio."
-            find . -maxdepth 3
+          APP_PATH=$(find . -maxdepth 4 -iname "Congreso_App.py" | head -n 1)
+          CFG_PATH=$(find . -maxdepth 4 -iname "Configurador_Congreso.py" | head -n 1)
+
+          if [ -z "$APP_PATH" ]; then
+            echo "ERROR: No se encontró Congreso_App.py"
             exit 1
           fi
-          echo "Compilando $SCRIPT_PATH en arquitectura $(uname -m)..."
+          if [ -z "$CFG_PATH" ]; then
+            echo "ERROR: No se encontró Configurador_Congreso.py"
+            exit 1
+          fi
+
           python -m pip install --upgrade pip
           pip install pyinstaller flask pandas openpyxl
-          pyinstaller --noconfirm --windowed --onefile --target-architecture x86_64 --name "Congreso_App" "$SCRIPT_PATH"
+
+          pyinstaller --noconfirm --windowed --onefile --target-architecture x86_64 --name "Congreso_App" "$APP_PATH"
+          pyinstaller --noconfirm --windowed --onefile --target-architecture x86_64 --name "Configurador_Congreso" "$CFG_PATH"
+
           mkdir -p staging
           cp -R "dist/Congreso_App.app" staging/
+          cp -R "dist/Configurador_Congreso.app" staging/
           ln -s /Applications staging/Applications
-          hdiutil create -volname "Congreso_App" -srcfolder staging -ov -format UDZO "Congreso_App_Mac_Intel.dmg"
+          hdiutil create -volname "Sistema_Congreso_Mac_Intel" -srcfolder staging -ov -format UDZO "Sistema_Congreso_Mac_Intel.dmg"
 
       - name: Publicar DMG de macOS Intel
         uses: actions/upload-artifact@v4
         with:
-          name: Congreso_App_macOS_Intel
-          path: Congreso_App_Mac_Intel.dmg
+          name: Sistema_Congreso_macOS_Intel
+          path: Sistema_Congreso_Mac_Intel.dmg
 
   compilar-windows:
     runs-on: windows-latest
@@ -55,18 +64,19 @@ jobs:
       - name: Instalar dependencias y empaquetar EXE
         shell: bash
         run: |
-          SCRIPT_PATH=$(find . -maxdepth 4 -name "Congreso_App.py" | head -n 1)
-          if [ -z "$SCRIPT_PATH" ]; then
-            echo "ERROR: No se encontró Congreso_App.py en el repositorio."
-            find . -maxdepth 3
-            exit 1
-          fi
+          APP_PATH=$(find . -maxdepth 4 -iname "Congreso_App.py" | head -n 1)
+          CFG_PATH=$(find . -maxdepth 4 -iname "Configurador_Congreso.py" | head -n 1)
+
           python -m pip install --upgrade pip
           pip install pyinstaller flask pandas openpyxl
-          pyinstaller --noconfirm --onefile --name "Congreso_App" "$SCRIPT_PATH"
+
+          pyinstaller --noconfirm --onefile --name "Congreso_App" "$APP_PATH"
+          pyinstaller --noconfirm --onefile --name "Configurador_Congreso" "$CFG_PATH"
 
       - name: Publicar EXE de Windows
         uses: actions/upload-artifact@v4
         with:
-          name: Congreso_App_Windows
-          path: dist/Congreso_App.exe
+          name: Sistema_Congreso_Windows
+          path: |
+            dist/Congreso_App.exe
+            dist/Configurador_Congreso.exe

@@ -129,14 +129,58 @@ def cargar_datos_congreso():
 
 def buscar_columna(columnas, candidatos):
     for cand in candidatos:
+        ncand = norm_col(cand)
         for c in columnas:
-            if norm_col(c) == cand:
+            if norm_col(c) == ncand:
                 return c
     for cand in candidatos:
+        ncand = norm_col(cand)
         for c in columnas:
-            if cand in norm_col(c):
+            if ncand and ncand in norm_col(c):
                 return c
     return None
+
+
+def resolver_columnas_nivel_3(config, columnas_raw):
+    alias_defecto = [
+        ["hora inicio", "hora inicio sesion", "inicio"],
+        ["hora fin", "hora final", "fin"],
+        ["titulo sesion es", "titulo sesion", "titulo de sesion", "sesion", "titulo"],
+        ["sala"],
+        ["dia", "fecha"]
+    ]
+
+    n3_cfg = config.get("nivel_3_columnas") if config else None
+    if not n3_cfg and config:
+        for item in config.get("orden_carpetas", []):
+            if isinstance(item, list) and item:
+                n3_cfg = item
+                break
+
+    resueltas = []
+    usadas = set()
+
+    if n3_cfg:
+        for etiqueta_o_col in n3_cfg:
+            if not etiqueta_o_col:
+                continue
+            if etiqueta_o_col in columnas_raw and etiqueta_o_col not in usadas:
+                resueltas.append(etiqueta_o_col)
+                usadas.add(etiqueta_o_col)
+                continue
+            encontrada = buscar_columna([c for c in columnas_raw if c not in usadas], [etiqueta_o_col])
+            if encontrada:
+                resueltas.append(encontrada)
+                usadas.add(encontrada)
+
+    if not resueltas:
+        for grupo in alias_defecto:
+            encontrada = buscar_columna([c for c in columnas_raw if c not in usadas], grupo)
+            if encontrada:
+                resueltas.append(encontrada)
+                usadas.add(encontrada)
+
+    return resueltas
 
 
 def _formatear_nivel_3(row, cols, sep, max_chars):
@@ -157,23 +201,13 @@ def construir_ruta_sesion(row, config, columnas_raw):
 
     col_sala = config.get("nivel_1") or buscar_columna(columnas_raw, ["sala"])
     col_dia = config.get("nivel_2") or buscar_columna(columnas_raw, ["dia", "fecha"])
-
-    n3_cols = config.get("nivel_3_columnas")
-    if not n3_cols:
-        n3_cols = [
-            buscar_columna(columnas_raw, ["hora inicio", "hora inicio sesion"]),
-            buscar_columna(columnas_raw, ["hora fin", "hora final"]),
-            buscar_columna(columnas_raw, ["titulo sesion es", "titulo sesion", "titulo de sesion"]),
-            buscar_columna(columnas_raw, ["sala"]),
-            buscar_columna(columnas_raw, ["dia", "fecha"])
-        ]
-        n3_cols = [c for c in n3_cols if c]
+    n3_cols = resolver_columnas_nivel_3(config, columnas_raw)
 
     orden_carpetas = config.get("orden_carpetas", [])
     if orden_carpetas:
         for item in orden_carpetas:
             if isinstance(item, list):
-                partes.append(_formatear_nivel_3(row, item if item else n3_cols, sep_n3, max_n3))
+                partes.append(_formatear_nivel_3(row, n3_cols, sep_n3, max_n3))
             elif isinstance(item, str) and item in row:
                 if col_dia and item == col_dia and formato_dia_nn:
                     partes.append(sanitize_name(formatear_dia_valor(row[item])))
@@ -207,17 +241,23 @@ def _separar_nombres_celda(raw_val):
 
 
 def obtener_participantes_fila(row, columnas):
-    prefijos = (
+    palabras_clave = (
         "participante", "ponente", "speaker", "autor",
         "orador", "moderador", "panelista", "coordinador", "chair"
     )
+    excluir = ("email", "correo", "cargo", "empresa", "institucion", "afiliacion", "pais", "bio", "cv", "telefono", "rol")
+
     participantes = []
     claves_vistas = set()
 
-    for c in columnas:
+    for idx, c in enumerate(columnas):
         nc = norm_col(c)
-        if any(nc == p or nc.startswith(p + " ") or nc.startswith(p) or (" " + p) in nc for p in prefijos):
-            for nombre in _separar_nombres_celda(row[c]):
+        tiene_clave = any(pk in nc for pk in palabras_clave)
+        es_metadato = any(ex in nc for ex in excluir)
+
+        if tiene_clave and not es_metadato:
+            val_celda = row.iloc[idx] if hasattr(row, "iloc") else row[c]
+            for nombre in _separar_nombres_celda(val_celda):
                 nombre_san = sanitize_name(nombre)
                 if nombre_san == "_vacio":
                     continue
@@ -225,6 +265,7 @@ def obtener_participantes_fila(row, columnas):
                 if clave not in claves_vistas:
                     claves_vistas.add(clave)
                     participantes.append(nombre)
+
     return participantes
 
 
@@ -239,23 +280,19 @@ def contar_archivos_en_carpeta(ruta_abs):
     return total
 
 
-def ordenar_columnas_solicitadas(columnas):
-    grupos_prioridad = [
-        ["hora inicio", "hora inicio sesion"],
-        ["hora fin", "hora final"],
-        ["titulo sesion es", "titulo sesion", "titulo de sesion"],
-        ["sala"],
-        ["dia", "fecha"],
-        ["id"]
-    ]
+def ordenar_columnas_por_nivel_3(columnas, n3_cols):
     ordenadas = []
     usadas = set()
 
-    for grupo in grupos_prioridad:
-        col_encontrada = buscar_columna([c for c in columnas if c not in usadas], grupo)
-        if col_encontrada:
-            ordenadas.append(col_encontrada)
-            usadas.add(col_encontrada)
+    for c in n3_cols:
+        if c in columnas and c not in usadas:
+            ordenadas.append(c)
+            usadas.add(c)
+
+    col_id = buscar_columna([c for c in columnas if c not in usadas], ["id"])
+    if col_id:
+        ordenadas.append(col_id)
+        usadas.add(col_id)
 
     for c in columnas:
         if c not in usadas:
@@ -322,7 +359,7 @@ HTML_APP = """<!DOCTYPE html>
             padding: 6px 16px;
             color: #fff;
             font-size: 0.88rem;
-            width: 300px;
+            width: 340px;
         }
         .valex-search:focus { outline: none; border-color: #00b9ff; }
         .valex-subnav {
@@ -424,7 +461,12 @@ HTML_APP = """<!DOCTYPE html>
                 <div class="brand-icon"><i class="bi bi-easel2-fill"></i></div>
                 <span>Congreso<span style="color:#00b9ff;">App</span></span>
             </a>
-            <input type="text" id="buscadorPonente" class="valex-search" placeholder="Filtrar ponente en la agenda..." onkeyup="buscarPonente()">
+            <div class="d-flex align-items-center gap-2">
+                <input type="text" id="buscadorPonente" class="valex-search" placeholder="Filtrar agenda por ponente, sesión o texto..." onkeyup="filtrarDesdeArriba()" oninput="filtrarDesdeArriba()">
+                <button type="button" class="btn btn-sm btn-outline-info px-2 py-1" onclick="limpiarFiltros()" title="Limpiar filtro">
+                    <i class="bi bi-x-lg"></i>
+                </button>
+            </div>
         </div>
         <div class="d-flex align-items-center gap-2">
             <span class="badge bg-dark border border-secondary px-3 py-2">
@@ -492,7 +534,7 @@ HTML_APP = """<!DOCTYPE html>
         <div class="row g-3 mb-4">
             <div class="col-sm-6 col-xl-3">
                 <div class="kpi-card kpi-blue">
-                    <div class="kpi-title">Filas en Agenda</div>
+                    <div class="kpi-title">Ponentes en Agenda</div>
                     <div class="kpi-value" id="kpiVisibles">{{ items_agenda|length }}</div>
                     <div class="kpi-sub">Total desglosado: {{ items_agenda|length }}</div>
                     <svg class="kpi-wave" viewBox="0 0 200 40" preserveAspectRatio="none"><path d="M0,30 L30,22 L60,28 L95,12 L130,24 L165,10 L200,18 L200,40 L0,40 Z" fill="#ffffff"/></svg>
@@ -516,9 +558,9 @@ HTML_APP = """<!DOCTYPE html>
             </div>
             <div class="col-sm-6 col-xl-3">
                 <div class="kpi-card kpi-orange">
-                    <div class="kpi-title">Carpeta Sesión (Nivel 3)</div>
-                    <div class="kpi-value">≤ {{ config.max_chars_nivel_3 | default(50) }} Car./Campo</div>
-                    <div class="kpi-sub">Subcarpeta individual por ponente</div>
+                    <div class="kpi-title">Orden Nivel 3</div>
+                    <div class="kpi-value">{{ n3_cols_resueltas|length }} Campos</div>
+                    <div class="kpi-sub">{{ n3_cols_resueltas|join(' · ') if n3_cols_resueltas else 'Por defecto' }}</div>
                     <svg class="kpi-wave" viewBox="0 0 200 40" preserveAspectRatio="none"><path d="M0,20 L45,28 L85,14 L130,26 L170,15 L200,24 L200,40 L0,40 Z" fill="#ffffff"/></svg>
                 </div>
             </div>
@@ -529,8 +571,10 @@ HTML_APP = """<!DOCTYPE html>
         <div id="vistaTabla" class="valex-card">
             <div class="valex-card-header">
                 <div>
-                    <h5 class="valex-card-title">Agenda Desglosada por Ponente</h5>
-                    <div class="valex-card-subtitle">Ponente · Abrir Carpeta · Estado · Datos de Sesión</div>
+                    <h5 class="valex-card-title">Agenda Desglosada por Ponente (Orden Nivel 3)</h5>
+                    <div class="valex-card-subtitle">
+                        Orden aplicado: <strong>{{ n3_cols_resueltas|join(' → ') if n3_cols_resueltas else 'Estándar' }}</strong>
+                    </div>
                 </div>
                 <div class="d-flex gap-2">
                     {% if es_admin %}
@@ -580,6 +624,7 @@ HTML_APP = """<!DOCTYPE html>
                             data-estado="{{ 'cargado' if item.tiene_ppt else 'pendiente' }}"
                             data-sala="{{ item.sala }}"
                             data-ponente="{{ item.ponente|lower }}"
+                            data-busqueda="{{ item.texto_busqueda|lower }}"
                             {% for col in columnas_ordenadas %}
                                 data-c_{{ loop.index0 }}="{{ item.datos[col]|lower }}"
                             {% endfor %}
@@ -623,7 +668,7 @@ HTML_APP = """<!DOCTYPE html>
 
         <div id="vistaVisor" class="d-none">
             {% for dia, sesiones in visor_por_dia.items() %}
-                <div class="valex-card mb-4">
+                <div class="valex-card visor-dia-card mb-4">
                     <div class="valex-card-header">
                         <div>
                             <h5 class="valex-card-title"><i class="bi bi-calendar3 text-info me-2"></i>Día: {{ dia }}</h5>
@@ -640,7 +685,7 @@ HTML_APP = """<!DOCTYPE html>
                                         </div>
                                         <div class="d-flex flex-column gap-2">
                                             {% for p in ponentes_lista %}
-                                                <div class="d-flex justify-content-between align-items-center p-2 rounded" style="background:#1f2940; font-size:0.82rem;">
+                                                <div class="visor-ponente-item d-flex justify-content-between align-items-center p-2 rounded" data-busqueda="{{ (p.ponente ~ ' ' ~ sesion_nombre ~ ' ' ~ p.titulo_corto)|lower }}" style="background:#1f2940; font-size:0.82rem;">
                                                     <div class="me-2">
                                                         <div class="fw-semibold text-white">{{ p.ponente }}</div>
                                                         <small style="color:var(--text-muted);">{{ p.titulo_corto }}</small>
@@ -693,6 +738,7 @@ function cambiarVista(vista) {
         document.getElementById('vistaTabla').classList.add('d-none');
         document.getElementById('vistaVisor').classList.remove('d-none');
     }
+    aplicarFiltros();
 }
 
 function fijarPuesto() {
@@ -744,9 +790,18 @@ function subirPresentacion(input, rutaRelativa) {
         });
 }
 
+function filtrarVisor(queryGlobal) {
+    const q = (queryGlobal || '').toLowerCase().trim();
+    document.querySelectorAll('.visor-ponente-item').forEach(el => {
+        const texto = el.getAttribute('data-busqueda') || '';
+        el.style.display = (!q || texto.includes(q)) ? '' : 'none';
+    });
+}
+
 function aplicarFiltros() {
     const estado = document.getElementById('flt_estado').value;
     const ponenteFiltro = document.getElementById('flt_ponente_col').value.toLowerCase().trim();
+    const filtroArriba = document.getElementById('buscadorPonente').value.toLowerCase().trim();
     const inputsCol = Array.from(document.querySelectorAll('.flt-col'));
     const filas = document.querySelectorAll('#tablaPonencias tbody tr');
     let visibles = 0;
@@ -759,10 +814,12 @@ function aplicarFiltros() {
         }
         const estadoFila = tr.getAttribute('data-estado');
         const ponenteFila = tr.getAttribute('data-ponente') || '';
+        const busquedaFila = tr.getAttribute('data-busqueda') || '';
 
         let ok = true;
         if (estado && estadoFila !== estado) ok = false;
         if (ponenteFiltro && !ponenteFila.includes(ponenteFiltro)) ok = false;
+        if (filtroArriba && !busquedaFila.includes(filtroArriba)) ok = false;
 
         if (ok) {
             for (let i = 0; i < inputsCol.length; i++) {
@@ -783,6 +840,7 @@ function aplicarFiltros() {
     });
 
     document.getElementById('kpiVisibles').textContent = visibles;
+    filtrarVisor(filtroArriba);
 }
 
 function limpiarFiltros() {
@@ -793,15 +851,11 @@ function limpiarFiltros() {
     aplicarFiltros();
 }
 
-function buscarPonente() {
-    const q = document.getElementById('buscadorPonente').value.toLowerCase().trim();
-    document.getElementById('flt_ponente_col').value = q;
+function filtrarDesdeArriba() {
     aplicarFiltros();
 }
 
-if (SALA_BLOQUEADA) {
-    aplicarFiltros();
-}
+aplicarFiltros();
 </script>
 </body>
 </html>"""
@@ -814,7 +868,15 @@ def index():
         return render_template_string(HTML_APP, config=None, puesto_activo=None, puesto_bloqueado=None, sala_restringida=None, es_admin=False)
 
     columnas_raw = list(df.columns)
-    columnas_ordenadas = ordenar_columnas_solicitadas(columnas_raw)
+    n3_cols_resueltas = resolver_columnas_nivel_3(config, columnas_raw)
+    columnas_ordenadas = ordenar_columnas_por_nivel_3(columnas_raw, n3_cols_resueltas)
+
+    if n3_cols_resueltas:
+        df = df.sort_values(
+            by=n3_cols_resueltas,
+            key=lambda s: s.astype(str).str.lower().str.strip(),
+            kind="mergesort"
+        )
 
     col_sala = config.get("nivel_1") or buscar_columna(columnas_raw, ['sala'])
     col_dia = config.get("nivel_2") or buscar_columna(columnas_raw, ['dia', 'fecha'])
@@ -851,13 +913,16 @@ def index():
             if tiene_ppt:
                 con_archivo += 1
 
+            texto_busqueda = " ".join([p, sesion_val] + [datos_fila[c] for c in columnas_ordenadas])
+
             items_agenda.append({
                 "ponente": p,
                 "datos": datos_fila,
                 "sala": sala_val,
                 "ruta_carpeta": ruta_carpeta,
                 "tiene_ppt": tiene_ppt,
-                "num_archivos": num_archivos
+                "num_archivos": num_archivos,
+                "texto_busqueda": texto_busqueda
             })
 
             if sala_restringida and sanitize_name(sala_val).lower() != sanitize_name(sala_restringida).lower():
@@ -874,6 +939,7 @@ def index():
         HTML_APP,
         config=config,
         columnas_ordenadas=columnas_ordenadas,
+        n3_cols_resueltas=n3_cols_resueltas,
         items_agenda=items_agenda,
         con_archivo=con_archivo,
         puesto_activo=puesto_activo,

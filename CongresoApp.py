@@ -38,7 +38,10 @@ def sanitizar_nombre_carpeta(texto, max_len=None):
     return valor
 
 def norm_col(nombre):
-    return re.sub(r'[^a-z0-9]+', ' ', str(nombre).lower()).strip()
+    s = str(nombre).lower().strip()
+    for a, b in [('á', 'a'), ('é', 'e'), ('í', 'i'), ('ó', 'o'), ('ú', 'u'), ('ñ', 'n')]:
+        s = s.replace(a, b)
+    return re.sub(r'[^a-z0-9]+', ' ', s).strip()
 
 def cargar_datos_congreso():
     base = obtener_ruta_base()
@@ -60,7 +63,6 @@ def cargar_datos_congreso():
 
     df = pd.read_excel(ruta_excel, engine='openpyxl').fillna("")
 
-    # Archivo local para recordar el rol bloqueado de este equipo (se limpia al reiniciar el programa)
     ruta_puesto_sesion = os.path.join(ruta_activa, ".puesto_bloqueado_sesion.json")
     puesto_bloqueado = None
     if os.path.exists(ruta_puesto_sesion):
@@ -74,29 +76,59 @@ def cargar_datos_congreso():
     config["_ruta_puesto_sesion"] = ruta_puesto_sesion
     return config, df, ruta_activa
 
-def construir_ruta_sesion(row, config):
+def buscar_columna(columnas, candidatos):
+    for cand in candidatos:
+        for c in columnas:
+            if norm_col(c) == cand:
+                return c
+    for cand in candidatos:
+        for c in columnas:
+            if cand in norm_col(c):
+                return c
+    return None
+
+def construir_ruta_sesion(row, config, columnas_raw):
     partes = ["PPT"]
     orden_carpetas = config.get("orden_carpetas", [])
-    n3_cols = config.get("nivel_3_columnas") or ["HORA INICIO", "HORA FIN", "TÍTULO SESIÓN", "SALA", "DÍA"]
     sep_n3 = config.get("separador_nivel_3", " - ")
     max_n3 = int(config.get("max_chars_nivel_3", 50))
 
-    for item in orden_carpetas:
-        if isinstance(item, list):
-            valores = [str(row[c]).strip() for c in item if c in row and str(row[c]).strip()]
+    n3_cols = config.get("nivel_3_columnas")
+    if not n3_cols:
+        n3_cols = [
+            buscar_columna(columnas_raw, ["hora inicio", "hora inicio sesion"]),
+            buscar_columna(columnas_raw, ["hora fin", "hora final"]),
+            buscar_columna(columnas_raw, ["titulo sesion es", "titulo sesion", "titulo de sesion"]),
+            buscar_columna(columnas_raw, ["sala"]),
+            buscar_columna(columnas_raw, ["dia", "fecha"])
+        ]
+        n3_cols = [c for c in n3_cols if c]
+
+    tiene_lista_n3 = any(isinstance(x, list) for x in orden_carpetas)
+
+    if orden_carpetas:
+        for item in orden_carpetas:
+            if isinstance(item, list):
+                valores = [str(row[c]).strip() for c in item if c in row and str(row[c]).strip()]
+                combinado = sep_n3.join(valores) if valores else "Sin_Especificar"
+                partes.append(sanitizar_nombre_carpeta(combinado, max_len=max_n3))
+            elif item in row:
+                partes.append(sanitizar_nombre_carpeta(row[item]))
+        if not tiene_lista_n3 and n3_cols:
+            valores = [str(row[c]).strip() for c in n3_cols if c in row and str(row[c]).strip()]
             combinado = sep_n3.join(valores) if valores else "Sin_Especificar"
             partes.append(sanitizar_nombre_carpeta(combinado, max_len=max_n3))
-        else:
-            if item in row:
-                partes.append(sanitizar_nombre_carpeta(row[item]))
-
-    # Si no había lista en orden_carpetas, construir Nivel 3 con n3_cols
-    if not any(isinstance(x, list) for x in orden_carpetas):
-        valores = [str(row[c]).strip() for c in n3_cols if c in row and str(row[c]).strip()]
-        combinado = sep_n3.join(valores) if valores else "Sin_Especificar"
-        nivel3_carpeta = sanitizar_nombre_carpeta(combinado, max_len=max_n3)
-        if nivel3_carpeta not in partes:
-            partes.append(nivel3_carpeta)
+    else:
+        col_sala = buscar_columna(columnas_raw, ["sala"])
+        col_dia = buscar_columna(columnas_raw, ["dia", "fecha"])
+        if col_sala:
+            partes.append(sanitizar_nombre_carpeta(row[col_sala]))
+        if col_dia:
+            partes.append(sanitizar_nombre_carpeta(row[col_dia]))
+        if n3_cols:
+            valores = [str(row[c]).strip() for c in n3_cols if c in row and str(row[c]).strip()]
+            combinado = sep_n3.join(valores) if valores else "Sin_Especificar"
+            partes.append(sanitizar_nombre_carpeta(combinado, max_len=max_n3))
 
     return os.path.join(*partes)
 
@@ -114,11 +146,36 @@ def contar_archivos_en_carpeta(ruta_abs):
     if not os.path.exists(ruta_abs):
         return 0
     total = 0
-    for root, _, files in os.walk(ruta_abs):
+    for _, _, files in os.walk(ruta_abs):
         for f in files:
             if not f.startswith('.'):
                 total += 1
     return total
+
+def ordenar_columnas_solicitadas(columnas):
+    grupos_prioridad = [
+        ["hora inicio", "hora inicio sesion"],
+        ["hora fin", "hora final"],
+        ["titulo sesion es", "titulo sesion", "titulo de sesion"],
+        ["sala"],
+        ["dia", "fecha"],
+        ["id"]
+    ]
+    ordenadas = []
+    usadas = set()
+
+    for grupo in grupos_prioridad:
+        col_encontrada = buscar_columna([c for c in columnas if c not in usadas], grupo)
+        if col_encontrada:
+            ordenadas.append(col_encontrada)
+            usadas.add(col_encontrada)
+
+    for c in columnas:
+        if c not in usadas:
+            ordenadas.append(c)
+            usadas.add(c)
+
+    return ordenadas
 
 app = Flask(__name__)
 
@@ -237,45 +294,52 @@ HTML_APP = """<!DOCTYPE html>
         .valex-card-subtitle { font-size: 0.8rem; color: var(--text-muted); margin-top: 2px; }
         .form-select, .form-control {
             background-color: var(--bg-input) !important;
-            border: 1px solid rgba(255, 255, 255, 0.12) !important;
+            border: 1px solid rgba(255, 255, 255, 0.14) !important;
             color: #fff !important;
-            font-size: 0.84rem;
+            font-size: 0.82rem;
         }
+        .flt-input { min-width: 105px; }
         .btn-valex-blue { background: linear-gradient(to right, #0162e8, #00b9ff); border: none; color: #fff; font-weight: 600; }
         .btn-valex-green { background: linear-gradient(to right, #029666, #48d6a8); border: none; color: #fff; font-weight: 600; }
         .btn-valex-blue:hover, .btn-valex-green:hover { color: #fff; opacity: 0.92; }
         .table-valex { color: #e2e8f0; margin-bottom: 0; font-size: 0.84rem; }
-        .table-valex thead th {
+        .table-valex thead tr.header-titles th {
             background-color: #171f32;
-            color: var(--text-muted);
+            color: #cbd5e1;
             text-transform: uppercase;
-            font-size: 0.7rem;
+            font-size: 0.72rem;
             letter-spacing: 0.5px;
             border-bottom: 1px solid var(--border-color);
-            padding: 10px 12px;
+            padding: 11px 12px;
             white-space: nowrap;
+        }
+        .table-valex thead tr.header-filters th {
+            background-color: #121829;
+            border-bottom: 2px solid rgba(0, 185, 255, 0.25);
+            padding: 7px 10px;
         }
         .table-valex tbody td {
             border-bottom: 1px solid var(--border-color);
             padding: 10px 12px;
             vertical-align: middle;
         }
-        .table-valex tbody tr:hover { background-color: rgba(255, 255, 255, 0.03); }
+        .table-valex tbody tr:hover { background-color: rgba(255, 255, 255, 0.04); }
         .badge-ppt-ok { background: rgba(2, 150, 102, 0.2); color: #48d6a8; border: 1px solid rgba(72, 214, 168, 0.35); }
         .badge-ppt-wait { background: rgba(247, 106, 45, 0.2); color: #efa65f; border: 1px solid rgba(239, 166, 95, 0.35); }
         .ponente-link {
             display: inline-block;
-            background: rgba(1, 98, 232, 0.18);
-            border: 1px solid rgba(0, 185, 255, 0.35);
+            background: rgba(1, 98, 232, 0.2);
+            border: 1px solid rgba(0, 185, 255, 0.38);
             color: #7dd3fc;
             border-radius: 5px;
             padding: 3px 8px;
             font-size: 0.78rem;
-            margin: 2px 2px 0 0;
+            margin: 2px 3px 2px 0;
             cursor: pointer;
             text-decoration: none;
+            white-space: nowrap;
         }
-        .ponente-link:hover { background: rgba(0, 185, 255, 0.3); color: #fff; }
+        .ponente-link:hover { background: rgba(0, 185, 255, 0.35); color: #fff; }
     </style>
 </head>
 <body>
@@ -287,9 +351,9 @@ HTML_APP = """<!DOCTYPE html>
                 <span>Congreso<span style="color:#00b9ff;">App</span></span>
             </a>
             <div class="d-flex align-items-center gap-2">
-                <input type="text" id="buscadorPonente" class="valex-search" placeholder="Buscar ponente / participante..." onkeyup="buscarPonente()">
+                <input type="text" id="buscadorPonente" class="valex-search" placeholder="Buscar ponente / participante..." onkeyup="buscarPonente()" onkeydown="if(event.key==='Enter') irACarpetaPonente()">
                 <button class="btn btn-sm btn-valex-blue px-3 py-2" onclick="irACarpetaPonente()">
-                    <i class="bi bi-folder-symlink me-1"></i> Ir a Ponente
+                    <i class="bi bi-folder-symlink me-1"></i> Ir a Carpeta Ponente
                 </button>
             </div>
         </div>
@@ -309,33 +373,32 @@ HTML_APP = """<!DOCTYPE html>
     </header>
 
     <nav class="valex-subnav">
-        <span class="subnav-item active" onclick="cambiarVista('tabla')"><i class="bi bi-table"></i> Tabla de Ponencias</span>
+        <span class="subnav-item active" onclick="cambiarVista('tabla')"><i class="bi bi-table"></i> Tabla y Filtros por Campo</span>
         <span class="subnav-item" onclick="cambiarVista('visor')"><i class="bi bi-collection-play"></i> Visor por Días y Sesiones</span>
     </nav>
 
-    <div class="container-fluid px-4 pt-4" style="max-width: 1440px;">
+    <div class="container-fluid px-4 pt-4" style="max-width: 1480px;">
 
         {% if not config %}
             <div class="valex-card p-5 text-center my-5">
                 <i class="bi bi-exclamation-diamond text-warning display-4 mb-3"></i>
                 <h4 class="fw-bold">No se encontraron los archivos de configuración</h4>
                 <p style="color: var(--text-muted); max-width: 560px; margin: 10px auto 20px;">
-                    Coloca <code>programa.xlsx</code> y <code>config_congreso.json</code> junto a <strong>CongresoApp</strong>.
+                    Coloca <code>programa.xlsx</code> y <code>config_congreso.json</code> en la misma carpeta que <strong>CongresoApp</strong>.
                 </p>
                 <a href="/" class="btn btn-valex-blue px-4">Reintentar</a>
             </div>
         {% else %}
 
-        <!-- Selector de Puesto (Admin puede cargar; Sala solo ve su sala y queda bloqueado) -->
         <div class="valex-card mb-4">
             <div class="valex-card-header">
                 <div>
                     <h5 class="valex-card-title">Puesto de Trabajo en el Congreso</h5>
                     <div class="valex-card-subtitle">
                         {% if puesto_bloqueado %}
-                            Puesto fijado y bloqueado en <strong>{{ puesto_bloqueado }}</strong>. Para cambiarlo, vuelve a lanzar el programa.
+                            Puesto fijado y bloqueado en <strong>{{ puesto_bloqueado }}</strong>. Para cambiarlo, vuelve a abrir el programa.
                         {% else %}
-                            Selecciona <strong>ADM...</strong> (puede cargar presentaciones) o una <strong>SALA</strong> (solo lectura y se bloqueará al confirmarla).
+                            Selecciona <strong>ADM...</strong> (puede cargar presentaciones) o una <strong>SALA</strong> (solo lectura y queda bloqueada).
                         {% endif %}
                     </div>
                 </div>
@@ -357,7 +420,6 @@ HTML_APP = """<!DOCTYPE html>
             </div>
         </div>
 
-        <!-- KPIs -->
         <div class="row g-3 mb-4">
             <div class="col-sm-6 col-xl-3">
                 <div class="kpi-card kpi-blue">
@@ -385,7 +447,7 @@ HTML_APP = """<!DOCTYPE html>
             </div>
             <div class="col-sm-6 col-xl-3">
                 <div class="kpi-card kpi-orange">
-                    <div class="kpi-title">Carpeta Sesión</div>
+                    <div class="kpi-title">Carpeta Sesión (Nivel 3)</div>
                     <div class="kpi-value">≤ {{ config.max_chars_nivel_3 | default(50) }} Car.</div>
                     <div class="kpi-sub">Sanitizada + Subcarpetas Ponente</div>
                     <svg class="kpi-wave" viewBox="0 0 200 40" preserveAspectRatio="none"><path d="M0,20 L45,28 L85,14 L130,26 L170,15 L200,24 L200,40 L0,40 Z" fill="#ffffff"/></svg>
@@ -396,17 +458,16 @@ HTML_APP = """<!DOCTYPE html>
         <div id="alertaAccion" class="alert d-none mb-4"></div>
         <div id="resultadosPonente" class="valex-card p-3 mb-4 d-none"></div>
 
-        <!-- VISTA 1: TABLA ORDENADA Y FILTRABLE POR CAMPO -->
         <div id="vistaTabla" class="valex-card">
             <div class="valex-card-header">
                 <div>
                     <h5 class="valex-card-title">Programación y Carpetas de Ponentes</h5>
-                    <div class="valex-card-subtitle">Orden: Abrir Carpeta · Estado de Carga · Hora Inicio · Hora Fin · Título Sesión · Sala · Día · ID y resto</div>
+                    <div class="valex-card-subtitle">Abrir Carpeta · Estado · Hora Inicio · Hora Fin · Título Sesión · Sala · Día · ID · Resto</div>
                 </div>
                 <div class="d-flex gap-2">
                     {% if es_admin %}
                         <button class="btn btn-sm btn-valex-green px-3" onclick="crearArbolCarpetas()">
-                            <i class="bi bi-folder-plus me-1"></i> Generar Carpetas PPT
+                            <i class="bi bi-folder-plus me-1"></i> Generar Todas las Carpetas PPT
                         </button>
                     {% endif %}
                     <button class="btn btn-sm btn-valex-blue px-3" onclick="limpiarFiltros()">
@@ -418,18 +479,18 @@ HTML_APP = """<!DOCTYPE html>
             <div class="table-responsive">
                 <table class="table table-valex" id="tablaPonencias">
                     <thead>
-                        <tr>
+                        <tr class="header-titles">
                             <th>Abrir Carpeta</th>
                             <th>Estado de Carga</th>
                             {% for col in columnas_ordenadas %}
                                 <th>{{ col }}</th>
                             {% endfor %}
-                            <th>Carpetas Ponentes</th>
+                            <th>Carpetas por Ponente</th>
                         </tr>
-                        <tr style="background-color:#141b2d;">
-                            <th></th>
+                        <tr class="header-filters">
+                            <th><span class="text-secondary small">Acción</span></th>
                             <th>
-                                <select id="flt_estado" class="form-select form-select-sm" onchange="aplicarFiltros()">
+                                <select id="flt_estado" class="form-select form-select-sm" style="min-width:110px;" onchange="aplicarFiltros()">
                                     <option value="">Todos</option>
                                     <option value="cargado">Cargada</option>
                                     <option value="pendiente">Pendiente</option>
@@ -437,11 +498,11 @@ HTML_APP = """<!DOCTYPE html>
                             </th>
                             {% for col in columnas_ordenadas %}
                                 <th>
-                                    <input type="text" class="form-control form-control-sm flt-col" data-col="{{ col }}" placeholder="Filtrar..." onkeyup="aplicarFiltros()">
+                                    <input type="text" class="form-control form-control-sm flt-input flt-col" data-idx="{{ loop.index0 }}" placeholder="Filtrar {{ col }}..." onkeyup="aplicarFiltros()">
                                 </th>
                             {% endfor %}
                             <th>
-                                <input type="text" id="flt_ponente_col" class="form-control form-control-sm" placeholder="Ponente..." onkeyup="aplicarFiltros()">
+                                <input type="text" id="flt_ponente_col" class="form-control form-control-sm flt-input" placeholder="Filtrar ponente..." onkeyup="aplicarFiltros()">
                             </th>
                         </tr>
                     </thead>
@@ -457,18 +518,18 @@ HTML_APP = """<!DOCTYPE html>
                         >
                             <td>
                                 {% if es_admin %}
-                                    <div class="d-flex flex-wrap gap-1 align-items-center">
-                                        <button class="btn btn-sm btn-valex-blue" onclick='abrirRuta({{ fila.ruta_relativa | tojson }}, true)'>
+                                    <div class="d-flex flex-nowrap gap-1 align-items-center">
+                                        <button class="btn btn-sm btn-valex-blue" onclick='abrirRuta({{ fila.ruta_relativa | tojson }}, true)' title="Abrir carpeta con subcarpetas de ponentes">
                                             <i class="bi bi-folder2-open"></i> Abrir
                                         </button>
-                                        <label class="btn btn-sm btn-valex-green mb-0" title="Cargar presentación en esta sesión">
-                                            <i class="bi bi-upload"></i> Subir
+                                        <label class="btn btn-sm btn-valex-green mb-0" title="Cargar archivo en esta sesión">
+                                            <i class="bi bi-upload"></i>
                                             <input type="file" class="d-none" onchange='subirPresentacion(this, {{ fila.ruta_relativa | tojson }})'>
                                         </label>
                                     </div>
                                 {% else %}
                                     <button class="btn btn-sm btn-outline-info" onclick='abrirRuta({{ fila.ruta_relativa | tojson }}, false)'>
-                                        <i class="bi bi-eye"></i> Ver Carpeta
+                                        <i class="bi bi-eye"></i> Ver
                                     </button>
                                 {% endif %}
                             </td>
@@ -496,7 +557,6 @@ HTML_APP = """<!DOCTYPE html>
             </div>
         </div>
 
-        <!-- VISTA 2: VISOR SEPARADO POR DÍAS Y POR SESIONES -->
         <div id="vistaVisor" class="d-none">
             {% for dia, sesiones in visor_por_dia.items() %}
                 <div class="valex-card mb-4">
@@ -541,7 +601,6 @@ HTML_APP = """<!DOCTYPE html>
     </div>
 
 <script>
-const PUESTO_FIJADO = {{ puesto_bloqueado | tojson }};
 const SALA_BLOQUEADA = {{ sala_restringida | tojson }};
 
 function mostrarAlerta(texto, ok = true) {
@@ -578,7 +637,7 @@ function fijarPuesto() {
     .then(r => r.json())
     .then(data => {
         mostrarAlerta(data.mensaje, data.ok);
-        if (data.ok) setTimeout(() => location.reload(), 800);
+        if (data.ok) setTimeout(() => location.reload(), 700);
     });
 }
 
@@ -587,7 +646,7 @@ function crearArbolCarpetas() {
         .then(r => r.json())
         .then(data => {
             mostrarAlerta(data.mensaje, data.ok);
-            if (data.ok) setTimeout(() => location.reload(), 1000);
+            if (data.ok) setTimeout(() => location.reload(), 900);
         });
 }
 
@@ -640,7 +699,8 @@ function aplicarFiltros() {
             for (let i = 0; i < inputsCol.length; i++) {
                 const valFiltro = inputsCol[i].value.toLowerCase().trim();
                 if (valFiltro) {
-                    const valCelda = tr.getAttribute('data-c_' + i) || '';
+                    const idx = inputsCol[i].getAttribute('data-idx');
+                    const valCelda = tr.getAttribute('data-c_' + idx) || '';
                     if (!valCelda.includes(valFiltro)) {
                         ok = false;
                         break;
@@ -674,7 +734,7 @@ function buscarPonente() {
 function irACarpetaPonente() {
     const q = document.getElementById('buscadorPonente').value.trim();
     if (!q) {
-        mostrarAlerta('Escribe el nombre de un ponente o participante para buscar su carpeta.', false);
+        mostrarAlerta('Escribe el nombre de un ponente o participante para abrir su carpeta.', false);
         return;
     }
     fetch('/api/buscar-ponente?q=' + encodeURIComponent(q))
@@ -707,31 +767,6 @@ if (SALA_BLOQUEADA) {
 </body>
 </html>"""
 
-def ordenar_columnas_solicitadas(columnas):
-    prioridad = [
-        ["hora inicio", "hora inicio sesion"],
-        ["hora fin", "hora final"],
-        ["titulo sesion", "titulo de sesion", "titulo sesion es"],
-        ["sala"],
-        ["dia", "fecha"],
-        ["id"]
-    ]
-    ordenadas = []
-    usadas = set()
-
-    for grupo in prioridad:
-        for c in columnas:
-            if c not in usadas and any(norm_col(c) == p or p in norm_col(c) for p in grupo):
-                ordenadas.append(c)
-                usadas.add(c)
-
-    for c in columnas:
-        if c not in usadas:
-            ordenadas.append(c)
-            usadas.add(c)
-
-    return ordenadas
-
 @app.route('/')
 def index():
     config, df, ruta_activa = cargar_datos_congreso()
@@ -741,9 +776,9 @@ def index():
     columnas_raw = list(df.columns)
     columnas_ordenadas = ordenar_columnas_solicitadas(columnas_raw)
 
-    col_sala = next((c for c in columnas_raw if norm_col(c) == 'sala'), None)
-    col_dia = next((c for c in columnas_raw if norm_col(c) in ['dia', 'fecha']), None)
-    col_titulo = next((c for c in columnas_raw if 'titulo' in norm_col(c) or 'sesion' in norm_col(c)), None)
+    col_sala = buscar_columna(columnas_raw, ['sala'])
+    col_dia = buscar_columna(columnas_raw, ['dia', 'fecha'])
+    col_titulo = buscar_columna(columnas_raw, ['titulo sesion es', 'titulo sesion', 'titulo de sesion'])
 
     puesto_bloqueado = config.get("_puesto_bloqueado")
     puesto_activo = puesto_bloqueado or ""
@@ -755,7 +790,7 @@ def index():
     visor_por_dia = {}
 
     for _, row in df.iterrows():
-        ruta_sesion = construir_ruta_sesion(row, config)
+        ruta_sesion = construir_ruta_sesion(row, config, columnas_raw)
         ruta_abs = os.path.join(ruta_activa, ruta_sesion)
         participantes = obtener_participantes_fila(row, columnas_raw)
 
@@ -777,7 +812,7 @@ def index():
         sesion_val = os.path.basename(ruta_sesion)
         titulo_val = str(row[col_titulo]).strip() if col_titulo else sesion_val
 
-        fila_obj = {
+        filas.append({
             "datos": {c: str(row[c]) for c in columnas_ordenadas},
             "sala": sala_val,
             "participantes": participantes,
@@ -785,14 +820,13 @@ def index():
             "ruta_relativa": ruta_sesion,
             "tiene_ppt": tiene_ppt,
             "num_archivos": num_archivos
-        }
-        filas.append(fila_obj)
+        })
 
         if sala_restringida and sala_val.lower() != sala_restringida.lower():
             continue
 
         visor_por_dia.setdefault(dia_val, {}).setdefault(sesion_val, []).append({
-            "titulo_corto": titulo_val[:60],
+            "titulo_corto": titulo_val[:65],
             "participantes": participantes,
             "tiene_ppt": tiene_ppt
         })
@@ -812,21 +846,18 @@ def index():
 
 @app.route('/api/fijar-puesto', methods=['POST'])
 def api_fijar_puesto():
-    config, _, ruta_activa = cargar_datos_congreso()
+    config, _, _ = cargar_datos_congreso()
     if config is None:
         return jsonify({"ok": False, "mensaje": "No hay configuración cargada."})
     puesto = (request.json or {}).get("puesto", "").strip()
     if puesto not in config.get("equipos", []):
         return jsonify({"ok": False, "mensaje": "Puesto no válido."})
 
-    # Si es sala, queda bloqueada mientras dure esta ejecución del programa
-    if not puesto.upper().startswith("ADM"):
-        with open(config["_ruta_puesto_sesion"], "w", encoding="utf-8") as fp:
-            json.dump({"puesto": puesto}, fp)
-        return jsonify({"ok": True, "mensaje": f"Sala '{puesto}' fijada y bloqueada (solo lectura)."})
-
     with open(config["_ruta_puesto_sesion"], "w", encoding="utf-8") as fp:
         json.dump({"puesto": puesto}, fp)
+
+    if not puesto.upper().startswith("ADM"):
+        return jsonify({"ok": True, "mensaje": f"Sala '{puesto}' fijada y bloqueada (solo lectura)."})
     return jsonify({"ok": True, "mensaje": f"Puesto ADMIN '{puesto}' activado."})
 
 @app.route('/api/crear-carpetas', methods=['POST'])
@@ -841,7 +872,7 @@ def api_crear_carpetas():
     columnas_raw = list(df.columns)
     creadas = 0
     for _, row in df.iterrows():
-        ruta_sesion = construir_ruta_sesion(row, config)
+        ruta_sesion = construir_ruta_sesion(row, config, columnas_raw)
         ruta_abs = os.path.join(ruta_activa, ruta_sesion)
         if not os.path.exists(ruta_abs):
             os.makedirs(ruta_abs, exist_ok=True)
@@ -856,7 +887,7 @@ def api_crear_carpetas():
 
 @app.route('/api/abrir-ruta', methods=['POST'])
 def api_abrir_ruta():
-    config, _, ruta_activa = cargar_datos_congreso()
+    config, df, ruta_activa = cargar_datos_congreso()
     data = request.json or {}
     ruta_rel = data.get("ruta", "PPT")
     crear = bool(data.get("crear", True))
@@ -866,6 +897,12 @@ def api_abrir_ruta():
     ruta_abs = os.path.join(ruta_activa, ruta_rel)
     if crear and es_admin:
         os.makedirs(ruta_abs, exist_ok=True)
+        if df is not None:
+            columnas_raw = list(df.columns)
+            for _, row in df.iterrows():
+                if construir_ruta_sesion(row, config, columnas_raw) == ruta_rel:
+                    for p in obtener_participantes_fila(row, columnas_raw):
+                        os.makedirs(os.path.join(ruta_abs, sanitizar_nombre_carpeta(p)), exist_ok=True)
     elif not os.path.exists(ruta_abs):
         return jsonify({"ok": False, "mensaje": "La carpeta aún no existe en disco."})
 
@@ -898,7 +935,7 @@ def api_subir_presentacion():
 @app.route('/api/buscar-ponente')
 def api_buscar_ponente():
     q = (request.args.get("q") or "").strip().lower()
-    config, df, ruta_activa = cargar_datos_congreso()
+    config, df, _ = cargar_datos_congreso()
     if not q or config is None or df is None:
         return jsonify({"coincidencias": []})
 
@@ -907,7 +944,7 @@ def api_buscar_ponente():
     vistas = set()
 
     for _, row in df.iterrows():
-        ruta_sesion = construir_ruta_sesion(row, config)
+        ruta_sesion = construir_ruta_sesion(row, config, columnas_raw)
         for p in obtener_participantes_fila(row, columnas_raw):
             if q in p.lower():
                 ruta_p = os.path.join(ruta_sesion, sanitizar_nombre_carpeta(p))

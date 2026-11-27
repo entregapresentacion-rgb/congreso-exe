@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
 
 jobs:
-  build-macos:
+  build-macos-arm64:
     runs-on: macos-latest
     steps:
       - name: Descargar repositorio
@@ -22,14 +22,40 @@ jobs:
           python -m pip install --upgrade pip
           pip install pyinstaller pandas openpyxl
 
-      - name: Compilar ejecutable en macOS
+      - name: Compilar ejecutable macOS (Apple Silicon)
         run: |
-          pyinstaller --onefile --windowed --name Congreso_App Congreso_App.py
+          pyinstaller --onefile --windowed --target-arch arm64 --name Congreso_App Congreso_App.py
 
-      - name: Subir artefacto macOS
+      - name: Subir artefacto macOS arm64
         uses: actions/upload-artifact@v4
         with:
-          name: Congreso_App-macOS
+          name: Congreso_App-macOS-arm64
+          path: dist/Congreso_App*
+
+  build-macos-intel:
+    runs-on: macos-13
+    steps:
+      - name: Descargar repositorio
+        uses: actions/checkout@v4
+
+      - name: Configurar Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Instalar dependencias
+        run: |
+          python -m pip install --upgrade pip
+          pip install pyinstaller pandas openpyxl
+
+      - name: Compilar ejecutable macOS (Intel x86_64)
+        run: |
+          pyinstaller --onefile --windowed --target-arch x86_64 --name Congreso_App Congreso_App.py
+
+      - name: Subir artefacto macOS Intel
+        uses: actions/upload-artifact@v4
+        with:
+          name: Congreso_App-macOS-Intel
           path: dist/Congreso_App*
 
   build-windows:

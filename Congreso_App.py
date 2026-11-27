@@ -100,11 +100,63 @@ def formatear_dia_valor(valor, day_choice=0):
 
 def obtener_ruta_base():
     if getattr(sys, "frozen", False):
-        ruta = os.path.dirname(sys.executable)
-        if SISTEMA == "Darwin" and ruta.endswith("Contents/MacOS"):
-            ruta = os.path.abspath(os.path.join(ruta, "..", "..", ".."))
+        ruta = os.path.dirname(os.path.abspath(sys.executable))
+        if SISTEMA == "Darwin":
+            partes = ruta.split(os.sep)
+            for i, parte in enumerate(partes):
+                if parte.endswith(".app"):
+                    return os.path.abspath(os.sep.join(partes[:i])) or "/"
+            if ruta.endswith("Contents/MacOS"):
+                return os.path.abspath(os.path.join(ruta, "..", "..", ".."))
         return ruta
     return os.path.abspath(os.path.dirname(__file__))
+
+
+def _candidatos_carpeta_datos():
+    base = obtener_ruta_base()
+    candidatos = [
+        base,
+        os.path.abspath(os.path.join(base, "..")),
+        os.path.abspath(os.getcwd()),
+    ]
+    unicos = []
+    for c in candidatos:
+        if c and c not in unicos:
+            unicos.append(c)
+    return unicos
+
+
+def cargar_html_ui(nombre_archivo):
+    bases_ui = []
+    if getattr(sys, "_MEIPASS", None):
+        bases_ui.append(os.path.join(sys._MEIPASS, "ui"))
+    if getattr(sys, "frozen", False):
+        exe_dir = os.path.dirname(os.path.abspath(sys.executable))
+        bases_ui.append(os.path.join(exe_dir, "ui"))
+        bases_ui.append(os.path.join(exe_dir, "_internal", "ui"))
+        bases_ui.append(os.path.abspath(os.path.join(exe_dir, "..", "Resources", "ui")))
+    bases_ui.append(os.path.join(os.path.dirname(os.path.abspath(__file__)), "ui"))
+
+    for carpeta in bases_ui:
+        ruta = os.path.join(carpeta, nombre_archivo)
+        if os.path.exists(ruta):
+            with open(ruta, "r", encoding="utf-8") as f:
+                return f.read()
+    raise FileNotFoundError(f"No se encontró ui/{nombre_archivo} en ninguna ruta conocida.")
+
+
+HTML_ERROR = """<!DOCTYPE html>
+<html lang="es">
+<head><meta charset="UTF-8"><title>Error en Congreso_App</title></head>
+<body style="background:#111726;color:#fff;font-family:sans-serif;padding:30px;">
+  <h2 style="color:#f87171;">Se produjo un error al cargar Congreso_App</h2>
+  <p>Ruta activa detectada: <code>{{ ruta_activa }}</code></p>
+  <pre style="background:#1e293b;padding:16px;border-radius:8px;overflow:auto;color:#fca5a5;">{{ detalle_error }}</pre>
+</body>
+</html>"""
+
+HTML_APP = cargar_html_ui("app.html")
+HTML_RED = cargar_html_ui("red.html")
 
 
 def obtener_ip_local():
@@ -226,30 +278,33 @@ def norm_col(nombre):
 
 
 def cargar_datos_congreso():
-    ruta_activa = obtener_ruta_base()
-    ruta_json = os.path.join(ruta_activa, "config_congreso.json")
-    ruta_excel = os.path.join(ruta_activa, "programa.xlsx")
+    candidatos = _candidatos_carpeta_datos()
+    ruta_activa = candidatos[0] if candidatos else obtener_ruta_base()
 
-    if not os.path.exists(ruta_json) or not os.path.exists(ruta_excel):
-        return None, None, ruta_activa
+    for r in candidatos:
+        ruta_json = os.path.join(r, "config_congreso.json")
+        ruta_excel = os.path.join(r, "programa.xlsx")
+        if os.path.exists(ruta_json) and os.path.exists(ruta_excel):
+            ruta_activa = r
+            with open(ruta_json, "r", encoding="utf-8") as f:
+                config = json.load(f)
 
-    with open(ruta_json, "r", encoding="utf-8") as f:
-        config = json.load(f)
+            df = pd.read_excel(ruta_excel, engine="openpyxl").fillna("")
 
-    df = pd.read_excel(ruta_excel, engine="openpyxl").fillna("")
-
-    ruta_puesto_sesion = os.path.join(ruta_activa, ".puesto_bloqueado_sesion.json")
-    puesto_bloqueado = None
-    if os.path.exists(ruta_puesto_sesion):
-        try:
-            with open(ruta_puesto_sesion, "r", encoding="utf-8") as fp:
-                puesto_bloqueado = json.load(fp).get("puesto")
-        except Exception:
+            ruta_puesto_sesion = os.path.join(ruta_activa, ".puesto_bloqueado_sesion.json")
             puesto_bloqueado = None
+            if os.path.exists(ruta_puesto_sesion):
+                try:
+                    with open(ruta_puesto_sesion, "r", encoding="utf-8") as fp:
+                        puesto_bloqueado = json.load(fp).get("puesto")
+                except Exception:
+                    puesto_bloqueado = None
 
-    config["_puesto_bloqueado"] = puesto_bloqueado
-    config["_ruta_puesto_sesion"] = ruta_puesto_sesion
-    return config, df, ruta_activa
+            config["_puesto_bloqueado"] = puesto_bloqueado
+            config["_ruta_puesto_sesion"] = ruta_puesto_sesion
+            return config, df, ruta_activa
+
+    return None, None, ruta_activa
 
 
 def buscar_columna(columnas, candidatos):
@@ -503,720 +558,6 @@ def _render_simple(template_str, **ctx):
         if token in out:
             out = out.replace(token, "" if v is None else str(v))
     return out
-
-
-HTML_ERROR = """<!DOCTYPE html>
-<html lang="es">
-<head><meta charset="UTF-8"><title>Error en Congreso_App</title></head>
-<body style="background:#111726;color:#fff;font-family:sans-serif;padding:30px;">
-  <h2 style="color:#f87171;">Se produjo un error al cargar Congreso_App</h2>
-  <p>Ruta activa detectada: <code>{{ ruta_activa }}</code></p>
-  <pre style="background:#1e293b;padding:16px;border-radius:8px;overflow:auto;color:#fca5a5;">{{ detalle_error }}</pre>
-</body>
-</html>"""
-
-HTML_RED = """<!DOCTYPE html>
-<html lang="es">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>CongresoApp | Red, Equipos y Backup</title>
-    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
-    <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css" rel="stylesheet">
-    <style>
-        body { background-color: #111726; color: #fff; font-family: 'Roboto', sans-serif; padding-bottom: 40px; }
-        .valex-topbar { background-color: #1f2940; border-bottom: 1px solid rgba(255,255,255,0.08); padding: 12px 24px; }
-        .valex-card { background-color: #1f2940; border: 1px solid rgba(255,255,255,0.08); border-radius: 8px; }
-        .valex-card-header { padding: 16px 22px; border-bottom: 1px solid rgba(255,255,255,0.08); }
-        .table-dark-custom { --bs-table-bg: #151d30; --bs-table-color: #e2e8f0; --bs-table-border-color: rgba(255,255,255,0.08); }
-    </style>
-</head>
-<body>
-    <header class="valex-topbar d-flex justify-content-between align-items-center mb-4">
-        <div class="d-flex align-items-center gap-3">
-            <button type="button" class="btn btn-sm btn-outline-info" onclick="volverAgenda()"><i class="bi bi-arrow-left me-1"></i> Volver a Agenda</button>
-            <h5 class="m-0 fw-bold">Panel de Red, Equipos y Backup Local</h5>
-        </div>
-        <span class="badge bg-dark border border-secondary px-3 py-2" id="badgeIpTop">
-            <i class="bi bi-pc-display text-info me-1"></i> Cargando red...
-        </span>
-    </header>
-
-    <div class="container-fluid px-4" style="max-width: 1320px;">
-        <div class="row g-3 mb-4">
-            <div class="col-md-4">
-                <div class="valex-card p-3 h-100">
-                    <div class="small text-info fw-bold text-uppercase">Red Local</div>
-                    <div class="fs-5 fw-bold mt-1" id="redIp">-</div>
-                    <div class="small text-secondary mt-1" id="redMeta">-</div>
-                </div>
-            </div>
-            <div class="col-md-4">
-                <div class="valex-card p-3 h-100">
-                    <div class="small text-success fw-bold text-uppercase">Carpeta Backup Local</div>
-                    <div class="fs-6 fw-bold mt-1 text-break"><code id="redBackup">-</code></div>
-                    <div class="small text-secondary mt-1" id="redBackupCount">-</div>
-                </div>
-            </div>
-            <div class="col-md-4">
-                <div class="valex-card p-3 h-100">
-                    <div class="small text-warning fw-bold text-uppercase">Acceso Directo Escritorio</div>
-                    <div class="small fw-bold mt-1 text-break"><code id="redEscritorio">-</code></div>
-                    <div class="small text-secondary mt-1" id="redPpt">-</div>
-                </div>
-            </div>
-        </div>
-
-        <div class="valex-card">
-            <div class="valex-card-header d-flex justify-content-between align-items-center">
-                <div>
-                    <h6 class="m-0 fw-bold text-uppercase">Estado de Puestos y Equipos Configurados</h6>
-                    <small class="text-secondary">Actualización automática cada 5 segundos</small>
-                </div>
-                <button class="btn btn-sm btn-outline-info" onclick="cargarEstadoRed()"><i class="bi bi-arrow-clockwise me-1"></i> Actualizar</button>
-            </div>
-            <div class="p-3">
-                <table class="table table-dark table-hover table-dark-custom align-middle mb-0">
-                    <thead>
-                        <tr>
-                            <th>Puesto / Equipo</th>
-                            <th>Rol</th>
-                            <th>Estado de Sesión</th>
-                            <th>IP Local</th>
-                        </tr>
-                    </thead>
-                    <tbody id="tablaEquiposRed"></tbody>
-                </table>
-            </div>
-        </div>
-    </div>
-
-<script>
-function volverAgenda() {
-    window.pywebview.api.ir_a_agenda();
-}
-
-function cargarEstadoRed() {
-    window.pywebview.api.obtener_estado_red().then(d => {
-        if (!d || !d.ok) return;
-        document.getElementById('badgeIpTop').innerHTML = `<i class="bi bi-pc-display text-info me-1"></i> IP Local: ${d.ip_local} (${d.hostname})`;
-        document.getElementById('redIp').textContent = `${d.ip_local} (${d.hostname})`;
-        document.getElementById('redMeta').textContent = `Grupo: ${d.workgroup}`;
-        document.getElementById('redBackup').textContent = d.ruta_backup;
-        document.getElementById('redBackupCount').textContent = `Archivos en backup: ${d.archivos_backup} (nunca borra nada)`;
-        document.getElementById('redEscritorio').textContent = d.acceso_escritorio || 'No disponible';
-        document.getElementById('redPpt').textContent = `Carpeta PPT: ${d.ruta_ppt}`;
-
-        const tbody = document.getElementById('tablaEquiposRed');
-        tbody.innerHTML = d.equipos_detalle.map(eq => `
-            <tr>
-                <td class="fw-bold">${eq.nombre}</td>
-                <td>${eq.es_admin
-                    ? '<span class="badge bg-primary">ADMIN (Carga y gestión)</span>'
-                    : '<span class="badge bg-secondary">SALA (Solo lectura)</span>'}</td>
-                <td>${eq.bloqueado_aqui
-                    ? '<span class="badge bg-success"><i class="bi bi-lock-fill me-1"></i> Fijado y activo en este equipo</span>'
-                    : '<span class="badge bg-dark border border-secondary text-secondary">Disponible</span>'}</td>
-                <td><code>${d.ip_local}</code></td>
-            </tr>
-        `).join('');
-    });
-}
-
-window.addEventListener('pywebviewready', () => {
-    cargarEstadoRed();
-    setInterval(cargarEstadoRed, 5000);
-});
-</script>
-</body>
-</html>"""
-
-HTML_APP = """<!DOCTYPE html>
-<html lang="es">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>CongresoApp | Agenda por Sesiones</title>
-    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
-    <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css" rel="stylesheet">
-    <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@300;400;500;700&display=swap" rel="stylesheet">
-    <style>
-        :root {
-            --bg-body: #111726;
-            --bg-card: #1f2940;
-            --bg-input: #151d30;
-            --border-color: rgba(255, 255, 255, 0.08);
-            --text-main: #ffffff;
-            --text-muted: #94a3b8;
-        }
-        body {
-            background-color: var(--bg-body);
-            color: var(--text-main);
-            font-family: 'Roboto', -apple-system, BlinkMacSystemFont, sans-serif;
-            margin: 0;
-            padding-bottom: 50px;
-        }
-        .valex-topbar {
-            background-color: var(--bg-card);
-            border-bottom: 1px solid var(--border-color);
-            padding: 12px 24px;
-        }
-        .brand-logo {
-            display: flex;
-            align-items: center;
-            gap: 10px;
-            font-weight: 700;
-            font-size: 1.25rem;
-            color: #fff;
-            text-decoration: none;
-            cursor: pointer;
-        }
-        .brand-icon {
-            width: 32px;
-            height: 32px;
-            border-radius: 8px;
-            background: linear-gradient(135deg, #0162e8, #00b9ff);
-            display: flex;
-            align-items: center;
-            justify-content: center;
-        }
-        .valex-search {
-            background-color: var(--bg-input);
-            border: 1px solid rgba(56, 189, 248, 0.25);
-            border-radius: 20px;
-            padding: 7px 16px;
-            color: #fff;
-            font-size: 0.88rem;
-            width: 360px;
-            max-width: 100%;
-        }
-        .valex-search:focus { outline: none; border-color: #00b9ff; box-shadow: 0 0 0 2px rgba(0, 185, 255, 0.18); }
-        .kpi-card {
-            border-radius: 8px;
-            padding: 18px 20px 36px 20px;
-            position: relative;
-            overflow: hidden;
-            color: #fff;
-            box-shadow: 0 4px 15px rgba(0, 0, 0, 0.25);
-            height: 100%;
-        }
-        .kpi-blue { background: linear-gradient(to right, #0162e8 0%, #00b9ff 100%); }
-        .kpi-pink { background: linear-gradient(to right, #f93a5a 0%, #f7778c 100%); }
-        .kpi-green { background: linear-gradient(to right, #029666 0%, #48d6a8 100%); }
-        .kpi-orange { background: linear-gradient(to right, #f76a2d 0%, #efa65f 100%); }
-        .kpi-title { font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.8px; font-weight: 700; opacity: 0.9; margin-bottom: 6px; }
-        .kpi-value { font-size: 1.55rem; font-weight: 700; line-height: 1.2; }
-        .kpi-sub { font-size: 0.78rem; opacity: 0.85; margin-top: 4px; }
-        .kpi-wave { position: absolute; bottom: 0; left: 0; width: 100%; height: 32px; opacity: 0.35; }
-        .valex-card {
-            background-color: var(--bg-card);
-            border: 1px solid var(--border-color);
-            border-radius: 8px;
-            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.2);
-        }
-        .valex-card-header {
-            padding: 16px 22px;
-            border-bottom: 1px solid var(--border-color);
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            flex-wrap: wrap;
-            gap: 10px;
-        }
-        .valex-card-title { font-size: 0.95rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; margin: 0; }
-        .valex-card-subtitle { font-size: 0.8rem; color: var(--text-muted); margin-top: 2px; }
-        .form-select, .form-control {
-            background-color: var(--bg-input) !important;
-            border: 1px solid rgba(255, 255, 255, 0.14) !important;
-            color: #fff !important;
-            font-size: 0.84rem;
-        }
-        .btn-valex-blue { background: linear-gradient(to right, #0162e8, #00b9ff); border: none; color: #fff; font-weight: 600; }
-        .btn-valex-green { background: linear-gradient(to right, #029666, #48d6a8); border: none; color: #fff; font-weight: 600; }
-        .btn-valex-purple { background: linear-gradient(to right, #6d28d9, #a855f7); border: none; color: #fff; font-weight: 600; }
-        .btn-valex-blue:hover, .btn-valex-green:hover, .btn-valex-purple:hover { color: #fff; opacity: 0.92; }
-        .sesion-bloque {
-            border-radius: 10px;
-            margin-bottom: 18px;
-            overflow: hidden;
-            box-shadow: 0 6px 18px rgba(0, 0, 0, 0.28);
-        }
-        .sesion-bloque.tema-0 { background-color: #192642; border: 1px solid rgba(56, 189, 248, 0.35); border-left: 5px solid #00b9ff; }
-        .sesion-bloque.tema-0 .sesion-header { background: linear-gradient(90deg, rgba(1, 98, 232, 0.34), rgba(0, 185, 255, 0.12)); }
-        .sesion-bloque.tema-1 { background-color: #211e3d; border: 1px solid rgba(168, 85, 247, 0.35); border-left: 5px solid #a855f7; }
-        .sesion-bloque.tema-1 .sesion-header { background: linear-gradient(90deg, rgba(126, 34, 206, 0.34), rgba(168, 85, 247, 0.12)); }
-        .sesion-bloque.tema-2 { background-color: #162e36; border: 1px solid rgba(45, 212, 191, 0.35); border-left: 5px solid #2dd4bf; }
-        .sesion-bloque.tema-2 .sesion-header { background: linear-gradient(90deg, rgba(13, 148, 136, 0.34), rgba(45, 212, 191, 0.12)); }
-        .sesion-bloque.tema-3 { background-color: #2d2336; border: 1px solid rgba(244, 114, 182, 0.35); border-left: 5px solid #f472b6; }
-        .sesion-bloque.tema-3 .sesion-header { background: linear-gradient(90deg, rgba(190, 24, 93, 0.32), rgba(244, 114, 182, 0.12)); }
-        .sesion-header {
-            padding: 18px 24px;
-            border-bottom: 1px solid rgba(255, 255, 255, 0.08);
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            flex-wrap: wrap;
-            gap: 14px;
-        }
-        .sesion-meta-chip {
-            display: inline-flex;
-            align-items: center;
-            gap: 8px;
-            background: rgba(15, 23, 42, 0.72);
-            border: 1px solid rgba(255, 255, 255, 0.18);
-            border-radius: 8px;
-            padding: 8px 15px;
-            font-size: 1.15rem;
-            line-height: 1.35;
-            color: #ffffff;
-        }
-        .sesion-ruta-texto {
-            font-size: 1.05rem;
-            color: #e2e8f0;
-            margin-top: 6px;
-        }
-        .sesion-body { padding: 14px 20px; display: flex; flex-direction: column; gap: 10px; }
-        .ponente-card {
-            background-color: rgba(15, 23, 42, 0.52);
-            border: 1px solid rgba(255, 255, 255, 0.09);
-            border-radius: 8px;
-            padding: 11px 16px;
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            flex-wrap: wrap;
-            gap: 12px;
-        }
-        .ponente-card:hover { background-color: rgba(15, 23, 42, 0.78); border-color: rgba(56, 189, 248, 0.35); }
-        .cartel-estado {
-            font-size: 0.78rem;
-            font-weight: 700;
-            letter-spacing: 0.5px;
-            text-transform: uppercase;
-            padding: 5px 12px;
-            border-radius: 6px;
-            display: inline-flex;
-            align-items: center;
-            gap: 6px;
-        }
-        .cartel-cargada { background-color: rgba(16, 185, 129, 0.22); color: #6ee7b7; border: 1px solid rgba(52, 211, 153, 0.5); }
-        .cartel-pendiente { background-color: rgba(245, 158, 11, 0.22); color: #fcd34d; border: 1px solid rgba(251, 191, 36, 0.5); }
-    </style>
-</head>
-<body>
-
-    <header class="valex-topbar d-flex flex-wrap justify-content-between align-items-center gap-3">
-        <div class="d-flex align-items-center gap-3">
-            <a class="brand-logo" onclick="recargarDatos()">
-                <div class="brand-icon"><i class="bi bi-easel2-fill"></i></div>
-                <span>Congreso<span style="color:#00b9ff;">App</span></span>
-            </a>
-            <div class="d-flex align-items-center gap-2">
-                <input type="text" id="buscadorGlobal" class="valex-search" placeholder="Filtrar por ponente, sesión, sala o día..." onkeyup="filtrarAgenda()" oninput="filtrarAgenda()">
-                <button type="button" class="btn btn-sm btn-outline-info px-2 py-1" onclick="limpiarFiltros()" title="Limpiar filtro">
-                    <i class="bi bi-x-lg"></i>
-                </button>
-            </div>
-        </div>
-        <div class="d-flex align-items-center gap-2 flex-wrap">
-            <button type="button" class="btn btn-sm btn-valex-purple px-3" onclick="irARed()">
-                <i class="bi bi-hdd-network me-1"></i> Red y Equipos
-            </button>
-            <span class="badge bg-dark border border-secondary px-3 py-2" id="badgeWorkgroup">
-                <i class="bi bi-hdd-network text-info me-1"></i> N/A
-            </span>
-            <span class="badge bg-dark border border-secondary px-3 py-2" id="badgePuestoTop">
-                <i class="bi bi-shield-lock text-warning me-1"></i> Sin puesto fijado
-            </span>
-        </div>
-    </header>
-
-    <div class="container-fluid px-4 pt-4" style="max-width: 1440px;">
-
-        <div id="sinConfigBox" class="valex-card p-5 text-center my-5 d-none">
-            <i class="bi bi-exclamation-diamond text-warning display-4 mb-3"></i>
-            <h4 class="fw-bold">No se encontraron los archivos de configuración</h4>
-            <p style="color: var(--text-muted); max-width: 560px; margin: 10px auto 20px;">
-                Coloca <code>programa.xlsx</code> y <code>config_congreso.json</code> en la misma carpeta que <strong>Congreso_App</strong>.
-            </p>
-            <button type="button" class="btn btn-valex-blue px-4" onclick="recargarDatos()">Reintentar</button>
-        </div>
-
-        <div id="contenidoApp" class="d-none">
-            <div class="valex-card mb-4">
-                <div class="valex-card-header">
-                    <div>
-                        <h5 class="valex-card-title">Puesto de Trabajo en el Congreso</h5>
-                        <div class="valex-card-subtitle" id="subtituloPuesto">
-                            Selecciona <strong>ADM1/ADM2</strong> (puede cargar presentaciones) o una <strong>SALA</strong> (solo lectura y queda bloqueada).
-                        </div>
-                    </div>
-                    <div class="d-flex align-items-center gap-2" id="controlesPuesto">
-                        <select id="selectPuesto" class="form-select form-select-sm" style="width: 260px;"></select>
-                        <button type="button" id="btnConfirmarPuesto" class="btn btn-sm btn-valex-green px-3" onclick="fijarPuesto()">Confirmar y Bloquear</button>
-                    </div>
-                </div>
-            </div>
-
-            <div class="row g-3 mb-4">
-                <div class="col-sm-6 col-xl-3">
-                    <div class="kpi-card kpi-blue">
-                        <div class="kpi-title">Sesiones Visibles</div>
-                        <div class="kpi-value" id="kpiSesiones">0</div>
-                        <div class="kpi-sub" id="kpiSesionesTotal">Total sesiones: 0</div>
-                        <svg class="kpi-wave" viewBox="0 0 200 40" preserveAspectRatio="none"><path d="M0,30 L30,22 L60,28 L95,12 L130,24 L165,10 L200,18 L200,40 L0,40 Z" fill="#ffffff"/></svg>
-                    </div>
-                </div>
-                <div class="col-sm-6 col-xl-3">
-                    <div class="kpi-card kpi-pink">
-                        <div class="kpi-title">Ponentes Visibles</div>
-                        <div class="kpi-value" id="kpiPonentes">0</div>
-                        <div class="kpi-sub" id="kpiPonentesTotal">Total en programa: 0</div>
-                        <svg class="kpi-wave" viewBox="0 0 200 40" preserveAspectRatio="none"><path d="M0,25 L40,32 L80,15 L120,25 L160,12 L200,22 L200,40 L0,40 Z" fill="#ffffff"/></svg>
-                    </div>
-                </div>
-                <div class="col-sm-6 col-xl-3">
-                    <div class="kpi-card kpi-green">
-                        <div class="kpi-title">Presentaciones Cargadas</div>
-                        <div class="kpi-value" id="kpiCargadas">0 / 0</div>
-                        <div class="kpi-sub">Por ponente en cada sesión</div>
-                        <svg class="kpi-wave" viewBox="0 0 200 40" preserveAspectRatio="none"><path d="M0,32 L35,18 L75,26 L115,10 L155,20 L200,8 L200,40 L0,40 Z" fill="#ffffff"/></svg>
-                    </div>
-                </div>
-                <div class="col-sm-6 col-xl-3">
-                    <div class="kpi-card kpi-orange">
-                        <div class="kpi-title">Backup Local en Raíz</div>
-                        <div class="kpi-value" id="kpiBackupArch">0 Arch.</div>
-                        <div class="kpi-sub"><code id="kpiBackupRuta">-</code></div>
-                        <svg class="kpi-wave" viewBox="0 0 200 40" preserveAspectRatio="none"><path d="M0,20 L45,28 L85,14 L130,26 L170,15 L200,24 L200,40 L0,40 Z" fill="#ffffff"/></svg>
-                    </div>
-                </div>
-            </div>
-
-            <div id="alertaAccion" class="alert d-none mb-4"></div>
-
-            <div class="valex-card mb-4">
-                <div class="valex-card-header">
-                    <div>
-                        <h5 class="valex-card-title">Agenda Englobada por Sesiones</h5>
-                        <div class="valex-card-subtitle">
-                            Cada sesión agrupa su carpeta de ponencia y subcarpetas individuales por participante
-                        </div>
-                    </div>
-                    <div class="d-flex flex-wrap align-items-center gap-2">
-                        <select id="flt_dia" class="form-select form-select-sm" style="width: 150px;" onchange="filtrarAgenda()">
-                            <option value="">Todos los días</option>
-                        </select>
-                        <select id="flt_sala" class="form-select form-select-sm" style="width: 210px;" onchange="filtrarAgenda()">
-                            <option value="">Todas las salas</option>
-                        </select>
-                        <select id="flt_estado" class="form-select form-select-sm" style="width: 150px;" onchange="filtrarAgenda()">
-                            <option value="">Estado: Todos</option>
-                            <option value="cargado">Cargada</option>
-                            <option value="pendiente">Pendiente</option>
-                        </select>
-                        <button type="button" id="btnGenerarCarpetas" class="btn btn-sm btn-valex-green px-3" onclick="crearArbolCarpetas()">
-                            <i class="bi bi-folder-plus me-1"></i> Generar Carpetas
-                        </button>
-                        <button type="button" id="btnCarpetaPpt" class="btn btn-sm btn-valex-blue px-3" onclick="abrirRutaPpt()" title="Abrir carpeta raíz PPT">
-                            <i class="bi bi-folder2-open me-1"></i> Carpeta PPT
-                        </button>
-                        <button type="button" class="btn btn-sm btn-outline-light px-3" onclick="limpiarFiltros()">
-                            <i class="bi bi-x-circle me-1"></i> Limpiar
-                        </button>
-                    </div>
-                </div>
-
-                <div class="p-3" id="contenedorSesiones"></div>
-            </div>
-        </div>
-    </div>
-
-<script>
-let ESTADO_APP = null;
-let SALA_BLOQUEADA = null;
-let ES_ADMIN = true;
-
-function escHtml(s) {
-    return String(s ?? '').replace(/[&<>"']/g, m => ({
-        '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
-    }[m]));
-}
-
-function mostrarAlerta(texto, ok = true) {
-    const el = document.getElementById('alertaAccion');
-    el.className = 'alert mb-4';
-    el.style.background = ok ? 'rgba(2,150,102,0.2)' : 'rgba(249,58,90,0.2)';
-    el.style.border = ok ? '1px solid #48d6a8' : '1px solid #f7778c';
-    el.style.color = ok ? '#6ee7b7' : '#fda4af';
-    el.innerHTML = `<i class="bi ${ok ? 'bi-check-circle-fill' : 'bi-exclamation-triangle-fill'} me-2"></i>${escHtml(texto)}`;
-}
-
-function irARed() {
-    window.pywebview.api.ir_a_red();
-}
-
-function recargarDatos() {
-    window.pywebview.api.obtener_datos_agenda().then(renderizarAgenda);
-}
-
-function fijarPuesto() {
-    const puesto = document.getElementById('selectPuesto').value;
-    if (!puesto) return;
-    window.pywebview.api.fijar_puesto(puesto).then(data => {
-        mostrarAlerta(data.mensaje, data.ok);
-        if (data.ok) setTimeout(recargarDatos, 500);
-    });
-}
-
-function crearArbolCarpetas() {
-    window.pywebview.api.crear_carpetas().then(data => {
-        mostrarAlerta(data.mensaje, data.ok);
-        if (data.ok) setTimeout(recargarDatos, 700);
-    });
-}
-
-function abrirRuta(rutaRelativa, crearSiNoExiste = true) {
-    window.pywebview.api.abrir_ruta(rutaRelativa, crearSiNoExiste).then(data => {
-        if (data && !data.ok) mostrarAlerta(data.mensaje, false);
-    });
-}
-
-function abrirRutaPpt() {
-    abrirRuta('PPT', ES_ADMIN);
-}
-
-function subirPresentacionNativa(rutaRelativa) {
-    window.pywebview.api.seleccionar_y_subir_presentacion(rutaRelativa).then(data => {
-        if (!data || data.cancelado) return;
-        mostrarAlerta(data.mensaje, data.ok);
-        if (data.ok) setTimeout(recargarDatos, 500);
-    });
-}
-
-function renderizarAgenda(d) {
-    ESTADO_APP = d;
-    if (!d || !d.ok || !d.config_cargada) {
-        document.getElementById('sinConfigBox').classList.remove('d-none');
-        document.getElementById('contenidoApp').classList.add('d-none');
-        return;
-    }
-
-    document.getElementById('sinConfigBox').classList.add('d-none');
-    document.getElementById('contenidoApp').classList.remove('d-none');
-
-    SALA_BLOQUEADA = d.sala_restringida || null;
-    ES_ADMIN = !!d.es_admin;
-
-    document.getElementById('badgeWorkgroup').innerHTML = `<i class="bi bi-hdd-network text-info me-1"></i> ${escHtml(d.workgroup || 'N/A')}`;
-    const rolTxt = d.puesto_activo
-        ? `${escHtml(d.puesto_activo)} (${ES_ADMIN ? 'ADMIN' : 'SALA - SOLO LECTURA'})`
-        : 'Sin puesto fijado';
-    document.getElementById('badgePuestoTop').innerHTML = `<i class="bi bi-shield-lock text-warning me-1"></i> ${rolTxt}`;
-
-    const subPuesto = document.getElementById('subtituloPuesto');
-    const selPuesto = document.getElementById('selectPuesto');
-    const btnConfirmar = document.getElementById('btnConfirmarPuesto');
-    const controlesPuesto = document.getElementById('controlesPuesto');
-
-    if (d.puesto_bloqueado) {
-        subPuesto.innerHTML = `Puesto fijado y bloqueado en <strong>${escHtml(d.puesto_bloqueado)}</strong>. Para cambiarlo, vuelve a abrir el programa.`;
-        selPuesto.innerHTML = `<option value="${escHtml(d.puesto_bloqueado)}" selected>${escHtml(d.puesto_bloqueado)}</option>`;
-        selPuesto.disabled = true;
-        if (btnConfirmar) btnConfirmar.remove();
-        if (!document.getElementById('badgeBloqueado')) {
-            const sp = document.createElement('span');
-            sp.id = 'badgeBloqueado';
-            sp.className = 'badge bg-secondary px-3 py-2';
-            sp.innerHTML = '<i class="bi bi-lock-fill me-1"></i> Bloqueado';
-            controlesPuesto.appendChild(sp);
-        }
-    } else {
-        subPuesto.innerHTML = 'Selecciona <strong>ADM1/ADM2</strong> (puede cargar presentaciones) o una <strong>SALA</strong> (solo lectura y queda bloqueada).';
-        selPuesto.disabled = false;
-        selPuesto.innerHTML = '<option value="">-- Seleccionar puesto --</option>' +
-            (d.equipos || []).map(eq => {
-                const esAdm = String(eq).toUpperCase().startsWith('ADM');
-                const sel = eq === d.puesto_activo ? 'selected' : '';
-                return `<option value="${escHtml(eq)}" ${sel}>${escHtml(eq)} ${esAdm ? '(ADMIN - Carga)' : '(SALA - Solo ver)'}</option>`;
-            }).join('');
-    }
-
-    document.getElementById('kpiSesionesTotal').textContent = `Total sesiones: ${d.sesiones_agrupadas.length}`;
-    document.getElementById('kpiPonentesTotal').textContent = `Total en programa: ${d.total_ponentes}`;
-    document.getElementById('kpiCargadas').textContent = `${d.con_archivo} / ${d.total_ponentes}`;
-    document.getElementById('kpiBackupArch').textContent = `${d.archivos_backup} Arch.`;
-    document.getElementById('kpiBackupRuta').textContent = d.ruta_backup;
-
-    document.getElementById('btnGenerarCarpetas').classList.toggle('d-none', !ES_ADMIN);
-
-    const fltDia = document.getElementById('flt_dia');
-    const diaPrev = fltDia.value;
-    fltDia.innerHTML = '<option value="">Todos los días</option>' +
-        (d.dias_unicos || []).map(x => `<option value="${escHtml(String(x).toLowerCase())}">${escHtml(x)}</option>`).join('');
-    if (diaPrev) fltDia.value = diaPrev;
-
-    const fltSala = document.getElementById('flt_sala');
-    fltSala.innerHTML = '<option value="">Todas las salas</option>' +
-        (d.salas_unicas || []).map(s => {
-            const selected = SALA_BLOQUEADA && String(s).toLowerCase() === String(SALA_BLOQUEADA).toLowerCase() ? 'selected' : '';
-            return `<option value="${escHtml(String(s).toLowerCase())}" ${selected}>${escHtml(s)}</option>`;
-        }).join('');
-    fltSala.disabled = !!SALA_BLOQUEADA;
-
-    const cont = document.getElementById('contenedorSesiones');
-    cont.innerHTML = d.sesiones_agrupadas.map((sesion, idx) => {
-        const tema = idx % 4;
-        const chipsHtml = (sesion.campos_nivel_3 || []).map(m =>
-            `<span class="sesion-meta-chip"><strong class="text-info">${escHtml(m.etiqueta)}:</strong> <span>${escHtml(m.valor)}</span></span>`
-        ).join('');
-
-        const ponentesHtml = (sesion.ponentes || []).map(p => {
-            const estadoHtml = p.tiene_ppt
-                ? `<span class="cartel-estado cartel-cargada"><i class="bi bi-check-circle-fill"></i> CARGADA (${p.num_archivos})</span>`
-                : `<span class="cartel-estado cartel-pendiente"><i class="bi bi-hourglass-split"></i> PENDIENTE</span>`;
-
-            const subirHtml = ES_ADMIN
-                ? `<button type="button" class="btn btn-sm btn-valex-green px-3"
-                           title="Subir presentación a la subcarpeta de ${escHtml(p.ponente)}"
-                           onclick='subirPresentacionNativa(${JSON.stringify(p.ruta_carpeta)})'>
-                       <i class="bi bi-upload me-1"></i> Subir
-                   </button>`
-                : '';
-
-            return `
-                <div class="ponente-card"
-                     data-estado="${p.tiene_ppt ? 'cargado' : 'pendiente'}"
-                     data-ponente-texto="${escHtml(String(p.texto_busqueda || '').toLowerCase())}">
-                    <div class="d-flex align-items-center gap-3">
-                        <div style="width: 36px; height: 36px; border-radius: 50%; background: rgba(56, 189, 248, 0.16); border: 1px solid rgba(56, 189, 248, 0.35); display: flex; align-items: center; justify-content: center;">
-                            <i class="bi bi-person-fill text-info"></i>
-                        </div>
-                        <div>
-                            <div class="fw-bold text-white" style="font-size: 0.98rem;">${escHtml(p.ponente)}</div>
-                            ${p.detalle_extra ? `<div class="small" style="color: var(--text-muted);">${escHtml(p.detalle_extra)}</div>` : ''}
-                            <div class="small text-secondary"><code>${escHtml(p.ruta_carpeta)}</code></div>
-                        </div>
-                    </div>
-                    <div class="d-flex align-items-center flex-wrap gap-2">
-                        ${estadoHtml}
-                        <button type="button" class="btn btn-sm btn-valex-blue px-3"
-                                onclick='abrirRuta(${JSON.stringify(p.ruta_carpeta)}, ${ES_ADMIN ? 'true' : 'false'})'>
-                            <i class="bi bi-folder2-open me-1"></i> Subcarpeta
-                        </button>
-                        ${subirHtml}
-                    </div>
-                </div>
-            `;
-        }).join('');
-
-        return `
-            <div class="sesion-bloque tema-${tema}"
-                 data-sala="${escHtml(String(sesion.sala || '').toLowerCase())}"
-                 data-dia="${escHtml(String(sesion.dia || '').toLowerCase())}"
-                 data-sesion-texto="${escHtml(String(sesion.texto_busqueda || '').toLowerCase())}">
-                <div class="sesion-header">
-                    <div>
-                        <div class="d-flex flex-wrap align-items-center gap-2 mb-1">${chipsHtml}</div>
-                        <div class="sesion-ruta-texto">
-                            <i class="bi bi-folder2 text-warning me-1"></i>
-                            <code>${escHtml(sesion.ruta_sesion)}</code>
-                        </div>
-                    </div>
-                    <div class="d-flex align-items-center gap-2">
-                        <span class="badge bg-dark border border-secondary px-3 py-2" style="font-size: 0.95rem;">
-                            <i class="bi bi-people-fill text-info me-1"></i> ${(sesion.ponentes || []).length} participante(s)
-                        </span>
-                        <button type="button" class="btn btn-sm btn-outline-light"
-                                onclick='abrirRuta(${JSON.stringify(sesion.ruta_sesion)}, ${ES_ADMIN ? 'true' : 'false'})'
-                                title="Abrir carpeta de la ponencia">
-                            <i class="bi bi-folder-symlink me-1"></i> Carpeta Ponencia
-                        </button>
-                    </div>
-                </div>
-                <div class="sesion-body">${ponentesHtml}</div>
-            </div>
-        `;
-    }).join('');
-
-    filtrarAgenda();
-}
-
-function filtrarAgenda() {
-    const q = document.getElementById('buscadorGlobal').value.toLowerCase().trim();
-    const fltDia = document.getElementById('flt_dia').value.toLowerCase().trim();
-    const fltSala = document.getElementById('flt_sala').value.toLowerCase().trim();
-    const fltEstado = document.getElementById('flt_estado').value.toLowerCase().trim();
-
-    let sesionesVisibles = 0;
-    let ponentesVisibles = 0;
-
-    document.querySelectorAll('.sesion-bloque').forEach(bloque => {
-        const salaBloque = bloque.getAttribute('data-sala') || '';
-        const diaBloque = bloque.getAttribute('data-dia') || '';
-        const textoSesion = bloque.getAttribute('data-sesion-texto') || '';
-
-        if (SALA_BLOQUEADA && salaBloque !== SALA_BLOQUEADA.toLowerCase()) {
-            bloque.style.display = 'none';
-            return;
-        }
-        if (fltSala && salaBloque !== fltSala) {
-            bloque.style.display = 'none';
-            return;
-        }
-        if (fltDia && diaBloque !== fltDia) {
-            bloque.style.display = 'none';
-            return;
-        }
-
-        const coincideSesion = !q || textoSesion.includes(q);
-        let ponentesEnBloque = 0;
-
-        bloque.querySelectorAll('.ponente-card').forEach(card => {
-            const estadoCard = card.getAttribute('data-estado') || '';
-            const textoPonente = card.getAttribute('data-ponente-texto') || '';
-
-            const okEstado = !fltEstado || estadoCard === fltEstado;
-            const okTexto = coincideSesion || !q || textoPonente.includes(q);
-
-            if (okEstado && okTexto) {
-                card.style.display = '';
-                ponentesEnBloque++;
-                ponentesVisibles++;
-            } else {
-                card.style.display = 'none';
-            }
-        });
-
-        if (ponentesEnBloque > 0) {
-            bloque.style.display = '';
-            sesionesVisibles++;
-        } else {
-            bloque.style.display = 'none';
-        }
-    });
-
-    const kpiS = document.getElementById('kpiSesiones');
-    const kpiP = document.getElementById('kpiPonentes');
-    if (kpiS) kpiS.textContent = sesionesVisibles;
-    if (kpiP) kpiP.textContent = ponentesVisibles;
-}
-
-function limpiarFiltros() {
-    document.getElementById('buscadorGlobal').value = '';
-    document.getElementById('flt_dia').value = '';
-    if (!SALA_BLOQUEADA) {
-        document.getElementById('flt_sala').value = '';
-    }
-    document.getElementById('flt_estado').value = '';
-    filtrarAgenda();
-}
-
-window.addEventListener('pywebviewready', recargarDatos);
-</script>
-</body>
-</html>
-"""
 
 
 class ApiBridge:

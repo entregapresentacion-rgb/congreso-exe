@@ -743,4 +743,767 @@ HTML_APP = """<!DOCTYPE html>
         }
         .sesion-bloque.tema-0 { background-color: #192642; border: 1px solid rgba(56, 189, 248, 0.35); border-left: 5px solid #00b9ff; }
         .sesion-bloque.tema-0 .sesion-header { background: linear-gradient(90deg, rgba(1, 98, 232, 0.34), rgba(0, 185, 255, 0.12)); }
-        .sesion-bloque.tema-1 { background-
+        .sesion-bloque.tema-1 { background-color: #211e3d; border: 1px solid rgba(168, 85, 247, 0.35); border-left: 5px solid #a855f7; }
+        .sesion-bloque.tema-1 .sesion-header { background: linear-gradient(90deg, rgba(126, 34, 206, 0.34), rgba(168, 85, 247, 0.12)); }
+        .sesion-bloque.tema-2 { background-color: #162e36; border: 1px solid rgba(45, 212, 191, 0.35); border-left: 5px solid #2dd4bf; }
+        .sesion-bloque.tema-2 .sesion-header { background: linear-gradient(90deg, rgba(13, 148, 136, 0.34), rgba(45, 212, 191, 0.12)); }
+        .sesion-bloque.tema-3 { background-color: #2d2336; border: 1px solid rgba(244, 114, 182, 0.35); border-left: 5px solid #f472b6; }
+        .sesion-bloque.tema-3 .sesion-header { background: linear-gradient(90deg, rgba(190, 24, 93, 0.32), rgba(244, 114, 182, 0.12)); }
+        .sesion-header {
+            padding: 18px 24px;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 14px;
+        }
+        .sesion-meta-chip {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            background: rgba(15, 23, 42, 0.72);
+            border: 1px solid rgba(255, 255, 255, 0.18);
+            border-radius: 8px;
+            padding: 8px 15px;
+            font-size: 1.15rem;
+            line-height: 1.35;
+            color: #ffffff;
+        }
+        .sesion-ruta-texto {
+            font-size: 1.05rem;
+            color: #e2e8f0;
+            margin-top: 6px;
+        }
+        .sesion-body { padding: 14px 20px; display: flex; flex-direction: column; gap: 10px; }
+        .ponente-card {
+            background-color: rgba(15, 23, 42, 0.52);
+            border: 1px solid rgba(255, 255, 255, 0.09);
+            border-radius: 8px;
+            padding: 11px 16px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 12px;
+        }
+        .ponente-card:hover { background-color: rgba(15, 23, 42, 0.78); border-color: rgba(56, 189, 248, 0.35); }
+        .cartel-estado {
+            font-size: 0.78rem;
+            font-weight: 700;
+            letter-spacing: 0.5px;
+            text-transform: uppercase;
+            padding: 5px 12px;
+            border-radius: 6px;
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+        }
+        .cartel-cargada { background-color: rgba(16, 185, 129, 0.22); color: #6ee7b7; border: 1px solid rgba(52, 211, 153, 0.5); }
+        .cartel-pendiente { background-color: rgba(245, 158, 11, 0.22); color: #fcd34d; border: 1px solid rgba(251, 191, 36, 0.5); }
+    </style>
+</head>
+<body>
+
+    <header class="valex-topbar d-flex flex-wrap justify-content-between align-items-center gap-3">
+        <div class="d-flex align-items-center gap-3">
+            <a class="brand-logo" onclick="recargarDatos()">
+                <div class="brand-icon"><i class="bi bi-easel2-fill"></i></div>
+                <span>Congreso<span style="color:#00b9ff;">App</span></span>
+            </a>
+            <div class="d-flex align-items-center gap-2">
+                <input type="text" id="buscadorGlobal" class="valex-search" placeholder="Filtrar por ponente, sesión, sala o día..." onkeyup="filtrarAgenda()" oninput="filtrarAgenda()">
+                <button type="button" class="btn btn-sm btn-outline-info px-2 py-1" onclick="limpiarFiltros()" title="Limpiar filtro">
+                    <i class="bi bi-x-lg"></i>
+                </button>
+            </div>
+        </div>
+        <div class="d-flex align-items-center gap-2 flex-wrap">
+            <button type="button" class="btn btn-sm btn-valex-purple px-3" onclick="irARed()">
+                <i class="bi bi-hdd-network me-1"></i> Red y Equipos
+            </button>
+            <span class="badge bg-dark border border-secondary px-3 py-2" id="badgeWorkgroup">
+                <i class="bi bi-hdd-network text-info me-1"></i> N/A
+            </span>
+            <span class="badge bg-dark border border-secondary px-3 py-2" id="badgePuestoTop">
+                <i class="bi bi-shield-lock text-warning me-1"></i> Sin puesto fijado
+            </span>
+        </div>
+    </header>
+
+    <div class="container-fluid px-4 pt-4" style="max-width: 1440px;">
+
+        <div id="sinConfigBox" class="valex-card p-5 text-center my-5 d-none">
+            <i class="bi bi-exclamation-diamond text-warning display-4 mb-3"></i>
+            <h4 class="fw-bold">No se encontraron los archivos de configuración</h4>
+            <p style="color: var(--text-muted); max-width: 560px; margin: 10px auto 20px;">
+                Coloca <code>programa.xlsx</code> y <code>config_congreso.json</code> en la misma carpeta que <strong>Congreso_App</strong>.
+            </p>
+            <button type="button" class="btn btn-valex-blue px-4" onclick="recargarDatos()">Reintentar</button>
+        </div>
+
+        <div id="contenidoApp" class="d-none">
+            <div class="valex-card mb-4">
+                <div class="valex-card-header">
+                    <div>
+                        <h5 class="valex-card-title">Puesto de Trabajo en el Congreso</h5>
+                        <div class="valex-card-subtitle" id="subtituloPuesto">
+                            Selecciona <strong>ADM1/ADM2</strong> (puede cargar presentaciones) o una <strong>SALA</strong> (solo lectura y queda bloqueada).
+                        </div>
+                    </div>
+                    <div class="d-flex align-items-center gap-2" id="controlesPuesto">
+                        <select id="selectPuesto" class="form-select form-select-sm" style="width: 260px;"></select>
+                        <button type="button" id="btnConfirmarPuesto" class="btn btn-sm btn-valex-green px-3" onclick="fijarPuesto()">Confirmar y Bloquear</button>
+                    </div>
+                </div>
+            </div>
+
+            <div class="row g-3 mb-4">
+                <div class="col-sm-6 col-xl-3">
+                    <div class="kpi-card kpi-blue">
+                        <div class="kpi-title">Sesiones Visibles</div>
+                        <div class="kpi-value" id="kpiSesiones">0</div>
+                        <div class="kpi-sub" id="kpiSesionesTotal">Total sesiones: 0</div>
+                        <svg class="kpi-wave" viewBox="0 0 200 40" preserveAspectRatio="none"><path d="M0,30 L30,22 L60,28 L95,12 L130,24 L165,10 L200,18 L200,40 L0,40 Z" fill="#ffffff"/></svg>
+                    </div>
+                </div>
+                <div class="col-sm-6 col-xl-3">
+                    <div class="kpi-card kpi-pink">
+                        <div class="kpi-title">Ponentes Visibles</div>
+                        <div class="kpi-value" id="kpiPonentes">0</div>
+                        <div class="kpi-sub" id="kpiPonentesTotal">Total en programa: 0</div>
+                        <svg class="kpi-wave" viewBox="0 0 200 40" preserveAspectRatio="none"><path d="M0,25 L40,32 L80,15 L120,25 L160,12 L200,22 L200,40 L0,40 Z" fill="#ffffff"/></svg>
+                    </div>
+                </div>
+                <div class="col-sm-6 col-xl-3">
+                    <div class="kpi-card kpi-green">
+                        <div class="kpi-title">Presentaciones Cargadas</div>
+                        <div class="kpi-value" id="kpiCargadas">0 / 0</div>
+                        <div class="kpi-sub">Por ponente en cada sesión</div>
+                        <svg class="kpi-wave" viewBox="0 0 200 40" preserveAspectRatio="none"><path d="M0,32 L35,18 L75,26 L115,10 L155,20 L200,8 L200,40 L0,40 Z" fill="#ffffff"/></svg>
+                    </div>
+                </div>
+                <div class="col-sm-6 col-xl-3">
+                    <div class="kpi-card kpi-orange">
+                        <div class="kpi-title">Backup Local en Raíz</div>
+                        <div class="kpi-value" id="kpiBackupArch">0 Arch.</div>
+                        <div class="kpi-sub"><code id="kpiBackupRuta">-</code></div>
+                        <svg class="kpi-wave" viewBox="0 0 200 40" preserveAspectRatio="none"><path d="M0,20 L45,28 L85,14 L130,26 L170,15 L200,24 L200,40 L0,40 Z" fill="#ffffff"/></svg>
+                    </div>
+                </div>
+            </div>
+
+            <div id="alertaAccion" class="alert d-none mb-4"></div>
+
+            <div class="valex-card mb-4">
+                <div class="valex-card-header">
+                    <div>
+                        <h5 class="valex-card-title">Agenda Englobada por Sesiones</h5>
+                        <div class="valex-card-subtitle">
+                            Cada sesión agrupa su carpeta de ponencia y subcarpetas individuales por participante
+                        </div>
+                    </div>
+                    <div class="d-flex flex-wrap align-items-center gap-2">
+                        <select id="flt_dia" class="form-select form-select-sm" style="width: 150px;" onchange="filtrarAgenda()">
+                            <option value="">Todos los días</option>
+                        </select>
+                        <select id="flt_sala" class="form-select form-select-sm" style="width: 210px;" onchange="filtrarAgenda()">
+                            <option value="">Todas las salas</option>
+                        </select>
+                        <select id="flt_estado" class="form-select form-select-sm" style="width: 150px;" onchange="filtrarAgenda()">
+                            <option value="">Estado: Todos</option>
+                            <option value="cargado">Cargada</option>
+                            <option value="pendiente">Pendiente</option>
+                        </select>
+                        <button type="button" id="btnGenerarCarpetas" class="btn btn-sm btn-valex-green px-3" onclick="crearArbolCarpetas()">
+                            <i class="bi bi-folder-plus me-1"></i> Generar Carpetas
+                        </button>
+                        <button type="button" id="btnCarpetaPpt" class="btn btn-sm btn-valex-blue px-3" onclick="abrirRutaPpt()" title="Abrir carpeta raíz PPT">
+                            <i class="bi bi-folder2-open me-1"></i> Carpeta PPT
+                        </button>
+                        <button type="button" class="btn btn-sm btn-outline-light px-3" onclick="limpiarFiltros()">
+                            <i class="bi bi-x-circle me-1"></i> Limpiar
+                        </button>
+                    </div>
+                </div>
+
+                <div class="p-3" id="contenedorSesiones"></div>
+            </div>
+        </div>
+    </div>
+
+<script>
+let ESTADO_APP = null;
+let SALA_BLOQUEADA = null;
+let ES_ADMIN = true;
+
+function escHtml(s) {
+    return String(s ?? '').replace(/[&<>"']/g, m => ({
+        '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+    }[m]));
+}
+
+function mostrarAlerta(texto, ok = true) {
+    const el = document.getElementById('alertaAccion');
+    el.className = 'alert mb-4';
+    el.style.background = ok ? 'rgba(2,150,102,0.2)' : 'rgba(249,58,90,0.2)';
+    el.style.border = ok ? '1px solid #48d6a8' : '1px solid #f7778c';
+    el.style.color = ok ? '#6ee7b7' : '#fda4af';
+    el.innerHTML = `<i class="bi ${ok ? 'bi-check-circle-fill' : 'bi-exclamation-triangle-fill'} me-2"></i>${escHtml(texto)}`;
+}
+
+function irARed() {
+    window.pywebview.api.ir_a_red();
+}
+
+function recargarDatos() {
+    window.pywebview.api.obtener_datos_agenda().then(renderizarAgenda);
+}
+
+function fijarPuesto() {
+    const puesto = document.getElementById('selectPuesto').value;
+    if (!puesto) return;
+    window.pywebview.api.fijar_puesto(puesto).then(data => {
+        mostrarAlerta(data.mensaje, data.ok);
+        if (data.ok) setTimeout(recargarDatos, 500);
+    });
+}
+
+function crearArbolCarpetas() {
+    window.pywebview.api.crear_carpetas().then(data => {
+        mostrarAlerta(data.mensaje, data.ok);
+        if (data.ok) setTimeout(recargarDatos, 700);
+    });
+}
+
+function abrirRuta(rutaRelativa, crearSiNoExiste = true) {
+    window.pywebview.api.abrir_ruta(rutaRelativa, crearSiNoExiste).then(data => {
+        if (data && !data.ok) mostrarAlerta(data.mensaje, false);
+    });
+}
+
+function abrirRutaPpt() {
+    abrirRuta('PPT', ES_ADMIN);
+}
+
+function subirPresentacionNativa(rutaRelativa) {
+    window.pywebview.api.seleccionar_y_subir_presentacion(rutaRelativa).then(data => {
+        if (!data || data.cancelado) return;
+        mostrarAlerta(data.mensaje, data.ok);
+        if (data.ok) setTimeout(recargarDatos, 500);
+    });
+}
+
+function renderizarAgenda(d) {
+    ESTADO_APP = d;
+    if (!d || !d.ok || !d.config_cargada) {
+        document.getElementById('sinConfigBox').classList.remove('d-none');
+        document.getElementById('contenidoApp').classList.add('d-none');
+        return;
+    }
+
+    document.getElementById('sinConfigBox').classList.add('d-none');
+    document.getElementById('contenidoApp').classList.remove('d-none');
+
+    SALA_BLOQUEADA = d.sala_restringida || null;
+    ES_ADMIN = !!d.es_admin;
+
+    document.getElementById('badgeWorkgroup').innerHTML = `<i class="bi bi-hdd-network text-info me-1"></i> ${escHtml(d.workgroup || 'N/A')}`;
+    const rolTxt = d.puesto_activo
+        ? `${escHtml(d.puesto_activo)} (${ES_ADMIN ? 'ADMIN' : 'SALA - SOLO LECTURA'})`
+        : 'Sin puesto fijado';
+    document.getElementById('badgePuestoTop').innerHTML = `<i class="bi bi-shield-lock text-warning me-1"></i> ${rolTxt}`;
+
+    const subPuesto = document.getElementById('subtituloPuesto');
+    const selPuesto = document.getElementById('selectPuesto');
+    const btnConfirmar = document.getElementById('btnConfirmarPuesto');
+    const controlesPuesto = document.getElementById('controlesPuesto');
+
+    if (d.puesto_bloqueado) {
+        subPuesto.innerHTML = `Puesto fijado y bloqueado en <strong>${escHtml(d.puesto_bloqueado)}</strong>. Para cambiarlo, vuelve a abrir el programa.`;
+        selPuesto.innerHTML = `<option value="${escHtml(d.puesto_bloqueado)}" selected>${escHtml(d.puesto_bloqueado)}</option>`;
+        selPuesto.disabled = true;
+        if (btnConfirmar) btnConfirmar.remove();
+        if (!document.getElementById('badgeBloqueado')) {
+            const sp = document.createElement('span');
+            sp.id = 'badgeBloqueado';
+            sp.className = 'badge bg-secondary px-3 py-2';
+            sp.innerHTML = '<i class="bi bi-lock-fill me-1"></i> Bloqueado';
+            controlesPuesto.appendChild(sp);
+        }
+    } else {
+        subPuesto.innerHTML = 'Selecciona <strong>ADM1/ADM2</strong> (puede cargar presentaciones) o una <strong>SALA</strong> (solo lectura y queda bloqueada).';
+        selPuesto.disabled = false;
+        selPuesto.innerHTML = '<option value="">-- Seleccionar puesto --</option>' +
+            (d.equipos || []).map(eq => {
+                const esAdm = String(eq).toUpperCase().startsWith('ADM');
+                const sel = eq === d.puesto_activo ? 'selected' : '';
+                return `<option value="${escHtml(eq)}" ${sel}>${escHtml(eq)} ${esAdm ? '(ADMIN - Carga)' : '(SALA - Solo ver)'}</option>`;
+            }).join('');
+    }
+
+    document.getElementById('kpiSesionesTotal').textContent = `Total sesiones: ${d.sesiones_agrupadas.length}`;
+    document.getElementById('kpiPonentesTotal').textContent = `Total en programa: ${d.total_ponentes}`;
+    document.getElementById('kpiCargadas').textContent = `${d.con_archivo} / ${d.total_ponentes}`;
+    document.getElementById('kpiBackupArch').textContent = `${d.archivos_backup} Arch.`;
+    document.getElementById('kpiBackupRuta').textContent = d.ruta_backup;
+
+    document.getElementById('btnGenerarCarpetas').classList.toggle('d-none', !ES_ADMIN);
+
+    const fltDia = document.getElementById('flt_dia');
+    const diaPrev = fltDia.value;
+    fltDia.innerHTML = '<option value="">Todos los días</option>' +
+        (d.dias_unicos || []).map(x => `<option value="${escHtml(String(x).toLowerCase())}">${escHtml(x)}</option>`).join('');
+    if (diaPrev) fltDia.value = diaPrev;
+
+    const fltSala = document.getElementById('flt_sala');
+    fltSala.innerHTML = '<option value="">Todas las salas</option>' +
+        (d.salas_unicas || []).map(s => {
+            const selected = SALA_BLOQUEADA && String(s).toLowerCase() === String(SALA_BLOQUEADA).toLowerCase() ? 'selected' : '';
+            return `<option value="${escHtml(String(s).toLowerCase())}" ${selected}>${escHtml(s)}</option>`;
+        }).join('');
+    fltSala.disabled = !!SALA_BLOQUEADA;
+
+    const cont = document.getElementById('contenedorSesiones');
+    cont.innerHTML = d.sesiones_agrupadas.map((sesion, idx) => {
+        const tema = idx % 4;
+        const chipsHtml = (sesion.campos_nivel_3 || []).map(m =>
+            `<span class="sesion-meta-chip"><strong class="text-info">${escHtml(m.etiqueta)}:</strong> <span>${escHtml(m.valor)}</span></span>`
+        ).join('');
+
+        const ponentesHtml = (sesion.ponentes || []).map(p => {
+            const estadoHtml = p.tiene_ppt
+                ? `<span class="cartel-estado cartel-cargada"><i class="bi bi-check-circle-fill"></i> CARGADA (${p.num_archivos})</span>`
+                : `<span class="cartel-estado cartel-pendiente"><i class="bi bi-hourglass-split"></i> PENDIENTE</span>`;
+
+            const subirHtml = ES_ADMIN
+                ? `<button type="button" class="btn btn-sm btn-valex-green px-3"
+                           title="Subir presentación a la subcarpeta de ${escHtml(p.ponente)}"
+                           onclick='subirPresentacionNativa(${JSON.stringify(p.ruta_carpeta)})'>
+                       <i class="bi bi-upload me-1"></i> Subir
+                   </button>`
+                : '';
+
+            return `
+                <div class="ponente-card"
+                     data-estado="${p.tiene_ppt ? 'cargado' : 'pendiente'}"
+                     data-ponente-texto="${escHtml(String(p.texto_busqueda || '').toLowerCase())}">
+                    <div class="d-flex align-items-center gap-3">
+                        <div style="width: 36px; height: 36px; border-radius: 50%; background: rgba(56, 189, 248, 0.16); border: 1px solid rgba(56, 189, 248, 0.35); display: flex; align-items: center; justify-content: center;">
+                            <i class="bi bi-person-fill text-info"></i>
+                        </div>
+                        <div>
+                            <div class="fw-bold text-white" style="font-size: 0.98rem;">${escHtml(p.ponente)}</div>
+                            ${p.detalle_extra ? `<div class="small" style="color: var(--text-muted);">${escHtml(p.detalle_extra)}</div>` : ''}
+                            <div class="small text-secondary"><code>${escHtml(p.ruta_carpeta)}</code></div>
+                        </div>
+                    </div>
+                    <div class="d-flex align-items-center flex-wrap gap-2">
+                        ${estadoHtml}
+                        <button type="button" class="btn btn-sm btn-valex-blue px-3"
+                                onclick='abrirRuta(${JSON.stringify(p.ruta_carpeta)}, ${ES_ADMIN ? 'true' : 'false'})'>
+                            <i class="bi bi-folder2-open me-1"></i> Subcarpeta
+                        </button>
+                        ${subirHtml}
+                    </div>
+                </div>
+            `;
+        }).join('');
+
+        return `
+            <div class="sesion-bloque tema-${tema}"
+                 data-sala="${escHtml(String(sesion.sala || '').toLowerCase())}"
+                 data-dia="${escHtml(String(sesion.dia || '').toLowerCase())}"
+                 data-sesion-texto="${escHtml(String(sesion.texto_busqueda || '').toLowerCase())}">
+                <div class="sesion-header">
+                    <div>
+                        <div class="d-flex flex-wrap align-items-center gap-2 mb-1">${chipsHtml}</div>
+                        <div class="sesion-ruta-texto">
+                            <i class="bi bi-folder2 text-warning me-1"></i>
+                            <code>${escHtml(sesion.ruta_sesion)}</code>
+                        </div>
+                    </div>
+                    <div class="d-flex align-items-center gap-2">
+                        <span class="badge bg-dark border border-secondary px-3 py-2" style="font-size: 0.95rem;">
+                            <i class="bi bi-people-fill text-info me-1"></i> ${(sesion.ponentes || []).length} participante(s)
+                        </span>
+                        <button type="button" class="btn btn-sm btn-outline-light"
+                                onclick='abrirRuta(${JSON.stringify(sesion.ruta_sesion)}, ${ES_ADMIN ? 'true' : 'false'})'
+                                title="Abrir carpeta de la ponencia">
+                            <i class="bi bi-folder-symlink me-1"></i> Carpeta Ponencia
+                        </button>
+                    </div>
+                </div>
+                <div class="sesion-body">${ponentesHtml}</div>
+            </div>
+        `;
+    }).join('');
+
+    filtrarAgenda();
+}
+
+function filtrarAgenda() {
+    const q = document.getElementById('buscadorGlobal').value.toLowerCase().trim();
+    const fltDia = document.getElementById('flt_dia').value.toLowerCase().trim();
+    const fltSala = document.getElementById('flt_sala').value.toLowerCase().trim();
+    const fltEstado = document.getElementById('flt_estado').value.toLowerCase().trim();
+
+    let sesionesVisibles = 0;
+    let ponentesVisibles = 0;
+
+    document.querySelectorAll('.sesion-bloque').forEach(bloque => {
+        const salaBloque = bloque.getAttribute('data-sala') || '';
+        const diaBloque = bloque.getAttribute('data-dia') || '';
+        const textoSesion = bloque.getAttribute('data-sesion-texto') || '';
+
+        if (SALA_BLOQUEADA && salaBloque !== SALA_BLOQUEADA.toLowerCase()) {
+            bloque.style.display = 'none';
+            return;
+        }
+        if (fltSala && salaBloque !== fltSala) {
+            bloque.style.display = 'none';
+            return;
+        }
+        if (fltDia && diaBloque !== fltDia) {
+            bloque.style.display = 'none';
+            return;
+        }
+
+        const coincideSesion = !q || textoSesion.includes(q);
+        let ponentesEnBloque = 0;
+
+        bloque.querySelectorAll('.ponente-card').forEach(card => {
+            const estadoCard = card.getAttribute('data-estado') || '';
+            const textoPonente = card.getAttribute('data-ponente-texto') || '';
+
+            const okEstado = !fltEstado || estadoCard === fltEstado;
+            const okTexto = coincideSesion || !q || textoPonente.includes(q);
+
+            if (okEstado && okTexto) {
+                card.style.display = '';
+                ponentesEnBloque++;
+                ponentesVisibles++;
+            } else {
+                card.style.display = 'none';
+            }
+        });
+
+        if (ponentesEnBloque > 0) {
+            bloque.style.display = '';
+            sesionesVisibles++;
+        } else {
+            bloque.style.display = 'none';
+        }
+    });
+
+    const kpiS = document.getElementById('kpiSesiones');
+    const kpiP = document.getElementById('kpiPonentes');
+    if (kpiS) kpiS.textContent = sesionesVisibles;
+    if (kpiP) kpiP.textContent = ponentesVisibles;
+}
+
+function limpiarFiltros() {
+    document.getElementById('buscadorGlobal').value = '';
+    document.getElementById('flt_dia').value = '';
+    if (!SALA_BLOQUEADA) {
+        document.getElementById('flt_sala').value = '';
+    }
+    document.getElementById('flt_estado').value = '';
+    filtrarAgenda();
+}
+
+window.addEventListener('pywebviewready', recargarDatos);
+</script>
+</body>
+</html>
+"""
+
+
+class ApiBridge:
+    def __init__(self, window):
+        self._window = window
+
+    def ir_a_red(self):
+        self._window.load_html(HTML_RED)
+
+    def ir_a_agenda(self):
+        self._window.load_html(HTML_APP)
+
+    def obtener_estado_red(self):
+        config, _, ruta_activa = cargar_datos_congreso()
+        return _construir_info_red(config, ruta_activa)
+
+    def obtener_datos_agenda(self):
+        ruta_activa = obtener_ruta_base()
+        try:
+            config, df, ruta_activa = cargar_datos_congreso()
+            ruta_backup = obtener_ruta_backup_local()
+            crear_acceso_directo_escritorio()
+
+            if config is None or df is None:
+                return {
+                    "ok": True,
+                    "config_cargada": False,
+                    "ruta_activa": ruta_activa,
+                    "ruta_backup": ruta_backup,
+                }
+
+            columnas_raw = list(df.columns)
+            n3_cols_resueltas = resolver_columnas_nivel_3(config, columnas_raw)
+            columnas_ordenadas = ordenar_columnas_por_nivel_3(columnas_raw, n3_cols_resueltas, config)
+
+            if n3_cols_resueltas:
+                df = df.sort_values(
+                    by=n3_cols_resueltas,
+                    key=lambda s: s.astype(str).str.replace("\xa0", " ", regex=False).str.lower().str.strip(),
+                    kind="mergesort",
+                )
+
+            col_sala = config.get("nivel_1") or buscar_columna(columnas_raw, ["sala"])
+            col_dia = config.get("nivel_2") or buscar_columna(columnas_raw, ["dia", "fecha"])
+            col_titulo_ponencia = buscar_columna(columnas_raw, ["titulo ponencia", "ponencia", "comunicacion", "titulo charla"])
+            formato_dia_nn = bool(config.get("formato_dia_nn", True))
+
+            puesto_bloqueado = config.get("_puesto_bloqueado")
+            puesto_activo = puesto_bloqueado or ""
+            es_admin = str(puesto_activo).upper().startswith("ADM") or puesto_activo == ""
+            sala_restringida = None if (not puesto_activo or es_admin) else sanitize_name(puesto_activo)
+
+            sesiones_map = {}
+            sesiones_agrupadas = []
+            dias_unicos = []
+            salas_unicas = []
+
+            for _, row in df.iterrows():
+                ruta_sesion = construir_ruta_sesion(row, config, columnas_raw)
+                sala_val = sanitize_name(row[col_sala]) if (col_sala and col_sala in row and str(row[col_sala]).strip()) else ""
+                if sala_val == "_vacio":
+                    sala_val = ""
+                raw_dia = row[col_dia] if col_dia and col_dia in row else ""
+                dia_val = formatear_dia_valor(raw_dia) if (col_dia and formato_dia_nn) else (str(raw_dia).strip() or "Sin Día")
+
+                if dia_val and dia_val not in dias_unicos:
+                    dias_unicos.append(dia_val)
+                if sala_val and sala_val not in salas_unicas:
+                    salas_unicas.append(sala_val)
+
+                if ruta_sesion not in sesiones_map:
+                    campos_n3 = []
+                    for c in (n3_cols_resueltas or columnas_ordenadas[:5]):
+                        if c in row:
+                            val_c = str(row[c]).replace("\xa0", " ").strip()
+                            if val_c:
+                                campos_n3.append({"etiqueta": c, "valor": val_c})
+
+                    meta_textos = [f"{m['etiqueta']} {m['valor']}" for m in campos_n3]
+                    texto_sesion = " ".join([ruta_sesion, sala_val, dia_val] + meta_textos)
+                    sesion_obj = {
+                        "ruta_sesion": ruta_sesion,
+                        "sala": sala_val,
+                        "dia": dia_val,
+                        "campos_nivel_3": campos_n3,
+                        "texto_busqueda": texto_sesion,
+                        "ponentes": [],
+                        "_ponentes_vistos": set(),
+                    }
+                    sesiones_map[ruta_sesion] = sesion_obj
+                    sesiones_agrupadas.append(sesion_obj)
+                else:
+                    sesion_obj = sesiones_map[ruta_sesion]
+
+                participantes = obtener_participantes_fila(row, columnas_raw, config) or ["Sin ponente"]
+                detalle_extra = str(row[col_titulo_ponencia]).replace("\xa0", " ").strip() if (col_titulo_ponencia and col_titulo_ponencia in row) else ""
+                datos_fila_txt = " ".join(str(row[c]).replace("\xa0", " ") for c in columnas_raw if c in row)
+
+                for p in participantes:
+                    p_san = sanitize_name(p)
+                    clave_p = re.sub(r"\s+", " ", p_san.lower()).strip()
+                    if clave_p in sesion_obj["_ponentes_vistos"]:
+                        continue
+                    sesion_obj["_ponentes_vistos"].add(clave_p)
+
+                    ruta_carpeta = os.path.join(ruta_sesion, p_san) if p_san != "_vacio" else ruta_sesion
+                    ruta_abs = os.path.join(ruta_activa, ruta_carpeta)
+                    num_archivos = contar_archivos_en_carpeta(ruta_abs)
+                    tiene_ppt = num_archivos > 0
+
+                    sesion_obj["ponentes"].append({
+                        "ponente": p,
+                        "detalle_extra": detalle_extra,
+                        "ruta_carpeta": ruta_carpeta,
+                        "tiene_ppt": tiene_ppt,
+                        "num_archivos": num_archivos,
+                        "texto_busqueda": f"{p} {detalle_extra} {datos_fila_txt}",
+                    })
+
+            for s in sesiones_agrupadas:
+                s.pop("_ponentes_vistos", None)
+
+            total_ponentes = sum(len(s["ponentes"]) for s in sesiones_agrupadas)
+            con_archivo = sum(1 for s in sesiones_agrupadas for p in s["ponentes"] if p["tiene_ppt"])
+            archivos_backup = contar_archivos_en_carpeta(ruta_backup)
+
+            return {
+                "ok": True,
+                "config_cargada": True,
+                "workgroup": config.get("workgroup", "N/A"),
+                "equipos": config.get("equipos", []),
+                "sesiones_agrupadas": sesiones_agrupadas,
+                "total_ponentes": total_ponentes,
+                "con_archivo": con_archivo,
+                "dias_unicos": dias_unicos,
+                "salas_unicas": salas_unicas,
+                "puesto_activo": puesto_activo,
+                "puesto_bloqueado": puesto_bloqueado,
+                "sala_restringida": sala_restringida,
+                "es_admin": es_admin,
+                "archivos_backup": archivos_backup,
+                "ruta_backup": ruta_backup,
+            }
+        except Exception:
+            self._window.load_html(
+                _render_simple(HTML_ERROR, ruta_activa=ruta_activa, detalle_error=traceback.format_exc())
+            )
+            return {"ok": False}
+
+    def fijar_puesto(self, puesto):
+        config, _, _ = cargar_datos_congreso()
+        if config is None:
+            return {"ok": False, "mensaje": "No hay configuración cargada."}
+        puesto = (puesto or "").strip()
+        if puesto not in config.get("equipos", []):
+            return {"ok": False, "mensaje": "Puesto no válido."}
+
+        with open(config["_ruta_puesto_sesion"], "w", encoding="utf-8") as fp:
+            json.dump({"puesto": puesto}, fp)
+
+        if not puesto.upper().startswith("ADM"):
+            return {"ok": True, "mensaje": f"Sala '{puesto}' fijada y bloqueada (solo lectura)."}
+        return {"ok": True, "mensaje": f"Puesto ADMIN '{puesto}' activado."}
+
+    def crear_carpetas(self):
+        config, df, ruta_activa = cargar_datos_congreso()
+        if config is None:
+            return {"ok": False, "mensaje": "Faltan archivos de configuración."}
+        puesto = config.get("_puesto_bloqueado") or ""
+        if puesto and not puesto.upper().startswith("ADM"):
+            return {"ok": False, "mensaje": "Solo los puestos ADMIN pueden crear o modificar carpetas."}
+
+        ruta_bk = obtener_ruta_backup_local()
+        crear_acceso_directo_escritorio()
+
+        columnas_raw = list(df.columns)
+        creadas = 0
+        rutas_creadas = set()
+
+        for _, row in df.iterrows():
+            ruta_sesion = construir_ruta_sesion(row, config, columnas_raw)
+            ruta_abs = os.path.join(ruta_activa, ruta_sesion)
+            if ruta_abs not in rutas_creadas and not os.path.exists(ruta_abs):
+                os.makedirs(ruta_abs, exist_ok=True)
+                rutas_creadas.add(ruta_abs)
+                creadas += 1
+
+            for p in obtener_participantes_fila(row, columnas_raw, config):
+                p_san = sanitize_name(p)
+                if p_san == "_vacio":
+                    continue
+                p_abs = os.path.join(ruta_abs, p_san)
+                if p_abs not in rutas_creadas and not os.path.exists(p_abs):
+                    os.makedirs(p_abs, exist_ok=True)
+                    rutas_creadas.add(p_abs)
+                    creadas += 1
+
+        copiados_bk = sincronizar_estructura_backup_local(ruta_activa)
+        return {
+            "ok": True,
+            "mensaje": f"Carpetas listas ({creadas} nuevas). {ruta_bk} sincronizado ({copiados_bk} archivos copiados, sin borrar nada).",
+        }
+
+    def abrir_ruta(self, ruta_rel, crear=True):
+        config, _, ruta_activa = cargar_datos_congreso()
+        ruta_rel = ruta_rel or "PPT"
+        puesto = config.get("_puesto_bloqueado") or "" if config else ""
+        es_admin = (not puesto) or puesto.upper().startswith("ADM")
+
+        ruta_abs = os.path.join(ruta_activa, ruta_rel)
+        if crear and es_admin:
+            os.makedirs(ruta_abs, exist_ok=True)
+        elif not os.path.exists(ruta_abs):
+            return {"ok": False, "mensaje": "La carpeta aún no existe en disco."}
+
+        if SISTEMA == "Windows":
+            os.startfile(ruta_abs)
+        elif SISTEMA == "Darwin":
+            subprocess.Popen(["open", ruta_abs])
+        else:
+            subprocess.Popen(["xdg-open", ruta_abs])
+        return {"ok": True}
+
+    def seleccionar_y_subir_presentacion(self, ruta_rel):
+        config, _, ruta_activa = cargar_datos_congreso()
+        puesto = config.get("_puesto_bloqueado") or "" if config else ""
+        if puesto and not puesto.upper().startswith("ADM"):
+            return {"ok": False, "mensaje": "Acceso denegado: las salas solo pueden ver presentaciones."}
+
+        resultado = self._window.create_file_dialog(webview.OPEN_DIALOG, allow_multiple=False)
+        if not resultado:
+            return {"ok": False, "cancelado": True}
+
+        archivo_origen = resultado[0] if isinstance(resultado, (list, tuple)) else resultado
+        if not archivo_origen or not os.path.exists(archivo_origen):
+            return {"ok": False, "mensaje": "No se pudo leer el archivo seleccionado."}
+
+        ruta_rel = ruta_rel or "PPT"
+        carpeta_destino = os.path.join(ruta_activa, ruta_rel)
+        os.makedirs(carpeta_destino, exist_ok=True)
+        nombre_base, ext = os.path.splitext(os.path.basename(archivo_origen))
+        nombre_seguro = sanitize_name(nombre_base) + sanitize_name(ext).replace("_vacio", "")
+        destino_ppt_abs = os.path.join(carpeta_destino, nombre_seguro)
+
+        shutil.copy2(archivo_origen, destino_ppt_abs)
+
+        ruta_bk_copia = copiar_a_backup_local_sin_borrar(ruta_rel, nombre_seguro, destino_ppt_abs)
+        crear_acceso_directo_escritorio()
+
+        return {
+            "ok": True,
+            "mensaje": f"Presentación '{nombre_seguro}' cargada en {ruta_rel} y copiada a {ruta_bk_copia} (sin borrar nada).",
+        }
+
+
+def limpiar_bloqueo_al_salir(ruta_archivo_bloqueo):
+    try:
+        if ruta_archivo_bloqueo and os.path.exists(ruta_archivo_bloqueo):
+            os.remove(ruta_archivo_bloqueo)
+    except Exception:
+        pass
+
+
+if __name__ == "__main__":
+    cfg, _, _ = cargar_datos_congreso()
+    try:
+        obtener_ruta_backup_local()
+        crear_acceso_directo_escritorio()
+    except Exception:
+        pass
+
+    ruta_bloq = cfg.get("_ruta_puesto_sesion") if cfg else None
+    limpiar_bloqueo_al_salir(ruta_bloq)
+
+    window = webview.create_window("CongresoApp | Agenda por Sesiones", html=HTML_APP, width=1360, height=860)
+    api = ApiBridge(window)
+    window.expose(
+        api.ir_a_red,
+        api.ir_a_agenda,
+        api.obtener_estado_red,
+        api.obtener_datos_agenda,
+        api.fijar_puesto,
+        api.crear_carpetas,
+        api.abrir_ruta,
+        api.seleccionar_y_subir_presentacion,
+    )
+    try:
+        webview.start()
+    finally:
+        limpiar_bloqueo_al_salir(ruta_bloq)

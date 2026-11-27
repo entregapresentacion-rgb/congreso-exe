@@ -2,7 +2,8 @@ import os
 import re
 import sys
 import json
-import base64
+import shutil
+import socket
 import traceback
 import platform
 import threading
@@ -31,6 +32,8 @@ ORDEN_COLUMNAS_PRIORITARIAS = [
     ("HORA FIN", ["hora fin", "hora_fin", "fin"]),
     ("TÍTULO SESIÓN ES", ["titulo sesion es", "titulo sesion", "titulo de sesion", "sesion"]),
 ]
+
+CARPETA_BACKUP_LOCAL = "BACKUP_LOCAL"
 
 
 def _cut_bytes(s, n=MAX_NAME_BYTES):
@@ -104,6 +107,124 @@ def obtener_ruta_base():
             ruta = os.path.abspath(os.path.join(ruta, "..", "..", ".."))
         return ruta
     return os.path.abspath(os.path.dirname(__file__))
+
+
+def obtener_ip_local():
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(("8.8.8.8", 80))
+        ip = s.getsockname()[0]
+        s.close()
+        return ip
+    except Exception:
+        try:
+            return socket.gethostbyname(socket.gethostname())
+        except Exception:
+            return "127.0.0.1"
+
+
+def obtener_ruta_backup_local(ruta_activa):
+    ruta_bk = os.path.join(ruta_activa, CARPETA_BACKUP_LOCAL)
+    os.makedirs(ruta_bk, exist_ok=True)
+    return ruta_bk
+
+
+def crear_acceso_directo_escritorio(ruta_activa):
+    """
+    Crea un acceso directo en el Escritorio apuntando a BACKUP_LOCAL (en la raíz).
+    Nunca borra archivos existentes.
+    """
+    ruta_bk = obtener_ruta_backup_local(ruta_activa)
+    escritorio = os.path.join(os.path.expanduser("~"), "Desktop")
+    if not os.path.exists(escritorio):
+        return None
+
+    nombre_base = "BACKUP_LOCAL_CONGRESO"
+    try:
+        if SISTEMA == "Windows":
+            lnk_path = os.path.join(escritorio, f"{nombre_base}.url")
+            if not os.path.exists(lnk_path):
+                uri = "file:///" + os.path.abspath(ruta_bk).replace("\\", "/")
+                with open(lnk_path, "w", encoding="utf-8") as f:
+                    f.write(f"[InternetShortcut]\nURL={uri}\n")
+            return lnk_path
+        elif SISTEMA == "Darwin":
+            webloc_path = os.path.join(escritorio, f"{nombre_base}.webloc")
+            if not os.path.exists(webloc_path):
+                uri = "file://" + os.path.abspath(ruta_bk)
+                plist = (
+                    '<?xml version="1.0" encoding="UTF-8"?>\n'
+                    '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" '
+                    '"http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n'
+                    '<plist version="1.0"><dict><key>URL</key><string>'
+                    f'{uri}</string></dict></plist>\n'
+                )
+                with open(webloc_path, "w", encoding="utf-8") as f:
+                    f.write(plist)
+            return webloc_path
+        else:
+            desktop_path = os.path.join(escritorio, f"{nombre_base}.desktop")
+            if not os.path.exists(desktop_path):
+                with open(desktop_path, "w", encoding="utf-8") as f:
+                    f.write(
+                        "[Desktop Entry]\n"
+                        "Type=Application\n"
+                        "Name=Backup Local Congreso\n"
+                        f"Exec=xdg-open \"{ruta_bk}\"\n"
+                        "Icon=folder\n"
+                        "Terminal=false\n"
+                    )
+            return desktop_path
+    except Exception:
+        return None
+
+
+def copiar_a_backup_local_sin_borrar(ruta_activa, ruta_rel_carpeta, nombre_archivo, archivo_origen_abs):
+    """
+    Copia el archivo subido a BACKUP_LOCAL manteniendo la estructura idéntica de PPT
+    (por ejemplo: BACKUP_LOCAL/PPT/Sala/DIA 15/Sesion/Ponente/archivo.pptx).
+    Nunca borra ni sobrescribe archivos existentes: si ya existe, añade sufijo _v2, _v3...
+    """
+    ruta_bk_raiz = obtener_ruta_backup_local(ruta_activa)
+    rel_limpia = os.path.normpath(ruta_rel_carpeta).lstrip("/\\")
+    carpeta_bk_destino = os.path.join(ruta_bk_raiz, rel_limpia)
+    os.makedirs(carpeta_bk_destino, exist_ok=True)
+
+    base_name, ext = os.path.splitext(nombre_archivo)
+    candidato = os.path.join(carpeta_bk_destino, nombre_archivo)
+    contador = 2
+    while os.path.exists(candidato):
+        candidato = os.path.join(carpeta_bk_destino, f"{base_name}_copia{contador}{ext}")
+        contador += 1
+
+    shutil.copy2(archivo_origen_abs, candidato)
+    return candidato
+
+
+def sincronizar_estructura_backup_local(ruta_activa):
+    """
+    Replica la estructura de carpetas de PPT dentro de BACKUP_LOCAL y copia cualquier
+    archivo presente en PPT que no esté aún en BACKUP_LOCAL, sin borrar nada.
+    """
+    ruta_bk_raiz = obtener_ruta_backup_local(ruta_activa)
+    ruta_ppt_raiz = os.path.join(ruta_activa, "PPT")
+    os.makedirs(ruta_ppt_raiz, exist_ok=True)
+    os.makedirs(os.path.join(ruta_bk_raiz, "PPT"), exist_ok=True)
+
+    copiados = 0
+    for dirpath, _, filenames in os.walk(ruta_ppt_raiz):
+        rel_dir = os.path.relpath(dirpath, ruta_activa)
+        dest_dir = os.path.join(ruta_bk_raiz, rel_dir)
+        os.makedirs(dest_dir, exist_ok=True)
+        for fname in filenames:
+            if fname.startswith("."):
+                continue
+            src_file = os.path.join(dirpath, fname)
+            dst_file = os.path.join(dest_dir, fname)
+            if not os.path.exists(dst_file):
+                shutil.copy2(src_file, dst_file)
+                copiados += 1
+    return copiados
 
 
 def norm_col(nombre):
@@ -370,6 +491,129 @@ HTML_ERROR = """<!DOCTYPE html>
 </body>
 </html>"""
 
+HTML_RED = """<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CongresoApp | Red, Equipos y Backup</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css" rel="stylesheet">
+    <style>
+        body { background-color: #111726; color: #fff; font-family: 'Roboto', sans-serif; padding-bottom: 40px; }
+        .valex-topbar { background-color: #1f2940; border-bottom: 1px solid rgba(255,255,255,0.08); padding: 12px 24px; }
+        .valex-card { background-color: #1f2940; border: 1px solid rgba(255,255,255,0.08); border-radius: 8px; }
+        .valex-card-header { padding: 16px 22px; border-bottom: 1px solid rgba(255,255,255,0.08); }
+        .table-dark-custom { --bs-table-bg: #151d30; --bs-table-color: #e2e8f0; --bs-table-border-color: rgba(255,255,255,0.08); }
+    </style>
+</head>
+<body>
+    <header class="valex-topbar d-flex justify-content-between align-items-center mb-4">
+        <div class="d-flex align-items-center gap-3">
+            <a href="/" class="btn btn-sm btn-outline-info"><i class="bi bi-arrow-left me-1"></i> Volver a Agenda</a>
+            <h5 class="m-0 fw-bold">Panel de Red, Equipos y Backup Local</h5>
+        </div>
+        <span class="badge bg-dark border border-secondary px-3 py-2">
+            <i class="bi bi-pc-display text-info me-1"></i> IP Local: {{ info_red.ip_local }} ({{ info_red.hostname }})
+        </span>
+    </header>
+
+    <div class="container-fluid px-4" style="max-width: 1320px;">
+        <div class="row g-3 mb-4">
+            <div class="col-md-4">
+                <div class="valex-card p-3 h-100">
+                    <div class="small text-info fw-bold text-uppercase">Red y Puerto Local</div>
+                    <div class="fs-5 fw-bold mt-1">{{ info_red.ip_local }}:5051</div>
+                    <div class="small text-secondary mt-1">Grupo: {{ info_red.workgroup }} · Host: {{ info_red.hostname }}</div>
+                </div>
+            </div>
+            <div class="col-md-4">
+                <div class="valex-card p-3 h-100">
+                    <div class="small text-success fw-bold text-uppercase">Carpeta Backup Local</div>
+                    <div class="small fw-bold mt-1 text-break"><code>{{ info_red.ruta_backup }}</code></div>
+                    <div class="small text-secondary mt-1">Archivos en backup: {{ info_red.archivos_backup }} (nunca borra nada)</div>
+                </div>
+            </div>
+            <div class="col-md-4">
+                <div class="valex-card p-3 h-100">
+                    <div class="small text-warning fw-bold text-uppercase">Acceso Directo Escritorio</div>
+                    <div class="small fw-bold mt-1 text-break"><code>{{ info_red.acceso_escritorio or 'No disponible' }}</code></div>
+                    <div class="small text-secondary mt-1">Carpeta PPT: <code>{{ info_red.ruta_ppt }}</code></div>
+                </div>
+            </div>
+        </div>
+
+        <div class="valex-card">
+            <div class="valex-card-header d-flex justify-content-between align-items-center">
+                <div>
+                    <h6 class="m-0 fw-bold text-uppercase">Estado de Puestos y Equipos Configurados</h6>
+                    <small class="text-secondary">Actualización automática cada 5 segundos</small>
+                </div>
+                <button class="btn btn-sm btn-outline-info" onclick="cargarEstadoRed()"><i class="bi bi-arrow-clockwise me-1"></i> Actualizar</button>
+            </div>
+            <div class="p-3">
+                <table class="table table-dark table-hover table-dark-custom align-middle mb-0">
+                    <thead>
+                        <tr>
+                            <th>Puesto / Equipo</th>
+                            <th>Rol</th>
+                            <th>Estado de Sesión</th>
+                            <th>IP / Host de este equipo</th>
+                        </tr>
+                    </thead>
+                    <tbody id="tablaEquiposRed">
+                        {% for eq in info_red.equipos_detalle %}
+                        <tr>
+                            <td class="fw-bold">{{ eq.nombre }}</td>
+                            <td>
+                                {% if eq.es_admin %}
+                                    <span class="badge bg-primary">ADMIN (Carga y gestión)</span>
+                                {% else %}
+                                    <span class="badge bg-secondary">SALA (Solo lectura)</span>
+                                {% endif %}
+                            </td>
+                            <td>
+                                {% if eq.bloqueado_aqui %}
+                                    <span class="badge bg-success"><i class="bi bi-lock-fill me-1"></i> Fijado y activo en este equipo</span>
+                                {% else %}
+                                    <span class="badge bg-dark border border-secondary text-secondary">Disponible</span>
+                                {% endif %}
+                            </td>
+                            <td><code>{{ info_red.ip_local }}</code></td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+<script>
+function cargarEstadoRed() {
+    fetch('/api/estado-red')
+        .then(r => r.json())
+        .then(d => {
+            if (!d.ok) return;
+            const tbody = document.getElementById('tablaEquiposRed');
+            tbody.innerHTML = d.equipos_detalle.map(eq => `
+                <tr>
+                    <td class="fw-bold">${eq.nombre}</td>
+                    <td>${eq.es_admin
+                        ? '<span class="badge bg-primary">ADMIN (Carga y gestión)</span>'
+                        : '<span class="badge bg-secondary">SALA (Solo lectura)</span>'}</td>
+                    <td>${eq.bloqueado_aqui
+                        ? '<span class="badge bg-success"><i class="bi bi-lock-fill me-1"></i> Fijado y activo en este equipo</span>'
+                        : '<span class="badge bg-dark border border-secondary text-secondary">Disponible</span>'}</td>
+                    <td><code>${d.ip_local}</code></td>
+                </tr>
+            `).join('');
+        });
+}
+setInterval(cargarEstadoRed, 5000);
+</script>
+</body>
+</html>"""
+
 HTML_APP = """<!DOCTYPE html>
 <html lang="es">
 <head>
@@ -467,11 +711,12 @@ HTML_APP = """<!DOCTYPE html>
             background-color: var(--bg-input) !important;
             border: 1px solid rgba(255, 255, 255, 0.14) !important;
             color: #fff !important;
-            font-size: 0.82rem;
+            font-size: 0.84rem;
         }
         .btn-valex-blue { background: linear-gradient(to right, #0162e8, #00b9ff); border: none; color: #fff; font-weight: 600; }
         .btn-valex-green { background: linear-gradient(to right, #029666, #48d6a8); border: none; color: #fff; font-weight: 600; }
-        .btn-valex-blue:hover, .btn-valex-green:hover { color: #fff; opacity: 0.92; }
+        .btn-valex-purple { background: linear-gradient(to right, #6d28d9, #a855f7); border: none; color: #fff; font-weight: 600; }
+        .btn-valex-blue:hover, .btn-valex-green:hover, .btn-valex-purple:hover { color: #fff; opacity: 0.92; }
         .sesion-bloque {
             border-radius: 10px;
             margin-bottom: 18px;
@@ -487,23 +732,29 @@ HTML_APP = """<!DOCTYPE html>
         .sesion-bloque.tema-3 { background-color: #2d2336; border: 1px solid rgba(244, 114, 182, 0.35); border-left: 5px solid #f472b6; }
         .sesion-bloque.tema-3 .sesion-header { background: linear-gradient(90deg, rgba(190, 24, 93, 0.32), rgba(244, 114, 182, 0.12)); }
         .sesion-header {
-            padding: 14px 20px;
+            padding: 16px 22px;
             border-bottom: 1px solid rgba(255, 255, 255, 0.08);
             display: flex;
             justify-content: space-between;
             align-items: center;
             flex-wrap: wrap;
-            gap: 12px;
+            gap: 14px;
         }
+        /* Zona de cabecera de sesión con texto grande y legible */
         .sesion-meta-chip {
             display: inline-flex;
             align-items: center;
-            gap: 5px;
-            background: rgba(15, 23, 42, 0.55);
-            border: 1px solid rgba(255, 255, 255, 0.12);
-            border-radius: 6px;
-            padding: 3px 9px;
-            font-size: 0.78rem;
+            gap: 7px;
+            background: rgba(15, 23, 42, 0.65);
+            border: 1px solid rgba(255, 255, 255, 0.16);
+            border-radius: 8px;
+            padding: 6px 13px;
+            font-size: 1rem;
+            line-height: 1.3;
+            color: #f8fafc;
+        }
+        .sesion-ruta-texto {
+            font-size: 0.96rem;
             color: #e2e8f0;
         }
         .sesion-body { padding: 14px 20px; display: flex; flex-direction: column; gap: 10px; }
@@ -549,7 +800,10 @@ HTML_APP = """<!DOCTYPE html>
                 </button>
             </div>
         </div>
-        <div class="d-flex align-items-center gap-2">
+        <div class="d-flex align-items-center gap-2 flex-wrap">
+            <a href="/red" class="btn btn-sm btn-valex-purple px-3">
+                <i class="bi bi-hdd-network me-1"></i> Red y Equipos
+            </a>
             <span class="badge bg-dark border border-secondary px-3 py-2">
                 <i class="bi bi-hdd-network text-info me-1"></i> {{ config.workgroup if config else 'N/A' }}
             </span>
@@ -634,9 +888,9 @@ HTML_APP = """<!DOCTYPE html>
                 </div>
                 <div class="col-sm-6 col-xl-3">
                     <div class="kpi-card kpi-orange">
-                        <div class="kpi-title">Columnas Prioritarias</div>
-                        <div class="kpi-value">7 Campos</div>
-                        <div class="kpi-sub">ESTADO PPT · CARPETA PONENCIA · SALA · DÍA · HORA INICIO · HORA FIN · TÍTULO SESIÓN ES</div>
+                        <div class="kpi-title">Backup Local Activo</div>
+                        <div class="kpi-value">{{ archivos_backup }} Arch.</div>
+                        <div class="kpi-sub"><code>BACKUP_LOCAL</code> · Nunca borra nada</div>
                         <svg class="kpi-wave" viewBox="0 0 200 40" preserveAspectRatio="none"><path d="M0,20 L45,28 L85,14 L130,26 L170,15 L200,24 L200,40 L0,40 Z" fill="#ffffff"/></svg>
                     </div>
                 </div>
@@ -670,12 +924,15 @@ HTML_APP = """<!DOCTYPE html>
                             <option value="cargado">Cargada</option>
                             <option value="pendiente">Pendiente</option>
                         </select>
+                        <button type="button" class="btn btn-sm btn-valex-blue px-3" onclick='abrirRuta("PPT", {{ "true" if es_admin else "false" }})' title="Abrir carpeta raíz PPT">
+                            <i class="bi bi-folder2-open me-1"></i> Carpeta PPT
+                        </button>
                         {% if es_admin %}
-                            <button class="btn btn-sm btn-valex-green px-3" onclick="crearArbolCarpetas()">
+                            <button type="button" class="btn btn-sm btn-valex-green px-3" onclick="crearArbolCarpetas()">
                                 <i class="bi bi-folder-plus me-1"></i> Generar Carpetas
                             </button>
                         {% endif %}
-                        <button class="btn btn-sm btn-valex-blue px-3" onclick="limpiarFiltros()">
+                        <button type="button" class="btn btn-sm btn-outline-light px-3" onclick="limpiarFiltros()">
                             <i class="bi bi-x-circle me-1"></i> Limpiar
                         </button>
                     </div>
@@ -697,14 +954,14 @@ HTML_APP = """<!DOCTYPE html>
                                             </span>
                                         {% endfor %}
                                     </div>
-                                    <div class="small" style="color: #cbd5e1;">
+                                    <div class="sesion-ruta-texto">
                                         <i class="bi bi-folder2 text-warning me-1"></i>
                                         <code>{{ sesion.ruta_sesion }}</code>
                                     </div>
                                 </div>
 
                                 <div class="d-flex align-items-center gap-2">
-                                    <span class="badge bg-dark border border-secondary px-2 py-2">
+                                    <span class="badge bg-dark border border-secondary px-3 py-2" style="font-size: 0.85rem;">
                                         <i class="bi bi-people-fill text-info me-1"></i> {{ sesion.ponentes|length }} participante(s)
                                     </span>
                                     <button type="button" class="btn btn-sm btn-outline-light"
@@ -726,7 +983,7 @@ HTML_APP = """<!DOCTYPE html>
                                                 <i class="bi bi-person-fill text-info"></i>
                                             </div>
                                             <div>
-                                                <div class="fw-bold text-white" style="font-size: 0.96rem;">{{ p.ponente }}</div>
+                                                <div class="fw-bold text-white" style="font-size: 0.98rem;">{{ p.ponente }}</div>
                                                 {% if p.detalle_extra %}
                                                     <div class="small" style="color: var(--text-muted);">{{ p.detalle_extra }}</div>
                                                 {% endif %}
@@ -906,6 +1163,60 @@ filtrarAgenda();
 """
 
 
+def _construir_info_red(config, ruta_activa):
+    ip_local = obtener_ip_local()
+    hostname = socket.gethostname()
+    ruta_bk = obtener_ruta_backup_local(ruta_activa)
+    ruta_ppt = os.path.join(ruta_activa, "PPT")
+    acceso_esc = crear_acceso_directo_escritorio(ruta_activa)
+    archivos_bk = contar_archivos_en_carpeta(ruta_bk)
+    puesto_bloq = (config or {}).get("_puesto_bloqueado") or ""
+    equipos = (config or {}).get("equipos", [])
+
+    equipos_detalle = []
+    for eq in equipos:
+        es_adm = str(eq).upper().startswith("ADM")
+        equipos_detalle.append({
+            "nombre": eq,
+            "es_admin": es_adm,
+            "bloqueado_aqui": bool(puesto_bloq and str(puesto_bloq).upper() == str(eq).upper()),
+        })
+
+    return {
+        "ok": True,
+        "ip_local": ip_local,
+        "hostname": hostname,
+        "workgroup": (config or {}).get("workgroup", "N/A"),
+        "puesto_bloqueado": puesto_bloq,
+        "ruta_ppt": ruta_ppt,
+        "ruta_backup": ruta_bk,
+        "acceso_escritorio": acceso_esc,
+        "archivos_backup": archivos_bk,
+        "equipos_detalle": equipos_detalle,
+    }
+
+
+@app.route("/red")
+def red_y_equipos():
+    ruta_activa = obtener_ruta_base()
+    try:
+        config, _, ruta_activa = cargar_datos_congreso()
+        info_red = _construir_info_red(config, ruta_activa)
+        return render_template_string(HTML_RED, info_red=info_red)
+    except Exception:
+        return render_template_string(
+            HTML_ERROR,
+            ruta_activa=ruta_activa,
+            detalle_error=traceback.format_exc(),
+        ), 500
+
+
+@app.route("/api/estado-red")
+def api_estado_red():
+    config, _, ruta_activa = cargar_datos_congreso()
+    return jsonify(_construir_info_red(config, ruta_activa))
+
+
 @app.route("/")
 def index():
     ruta_activa = obtener_ruta_base()
@@ -919,7 +1230,11 @@ def index():
                 puesto_bloqueado=None,
                 sala_restringida=None,
                 es_admin=False,
+                archivos_backup=0,
             )
+
+        obtener_ruta_backup_local(ruta_activa)
+        crear_acceso_directo_escritorio(ruta_activa)
 
         columnas_raw = list(df.columns)
         n3_cols_resueltas = resolver_columnas_nivel_3(config, columnas_raw)
@@ -1011,6 +1326,7 @@ def index():
 
         total_ponentes = sum(len(s["ponentes"]) for s in sesiones_agrupadas)
         con_archivo = sum(1 for s in sesiones_agrupadas for p in s["ponentes"] if p["tiene_ppt"])
+        archivos_backup = contar_archivos_en_carpeta(obtener_ruta_backup_local(ruta_activa))
 
         return render_template_string(
             HTML_APP,
@@ -1026,6 +1342,7 @@ def index():
             puesto_bloqueado=puesto_bloqueado,
             sala_restringida=sala_restringida,
             es_admin=es_admin,
+            archivos_backup=archivos_backup,
         )
     except Exception:
         return render_template_string(
@@ -1061,6 +1378,9 @@ def api_crear_carpetas():
     if puesto and not puesto.upper().startswith("ADM"):
         return jsonify({"ok": False, "mensaje": "Solo los puestos ADMIN pueden crear o modificar carpetas."})
 
+    obtener_ruta_backup_local(ruta_activa)
+    crear_acceso_directo_escritorio(ruta_activa)
+
     columnas_raw = list(df.columns)
     creadas = 0
     rutas_creadas = set()
@@ -1083,7 +1403,11 @@ def api_crear_carpetas():
                 rutas_creadas.add(p_abs)
                 creadas += 1
 
-    return jsonify({"ok": True, "mensaje": f"Carpetas de ponencia y subcarpetas por participante listas ({creadas} nuevas)."})
+    copiados_bk = sincronizar_estructura_backup_local(ruta_activa)
+    return jsonify({
+        "ok": True,
+        "mensaje": f"Carpetas listas ({creadas} nuevas). BACKUP_LOCAL sincronizado ({copiados_bk} archivos copiados, sin borrar nada)."
+    })
 
 
 @app.route("/api/abrir-ruta", methods=["POST"])
@@ -1126,8 +1450,16 @@ def api_subir_presentacion():
     os.makedirs(carpeta_destino, exist_ok=True)
     nombre_base, ext = os.path.splitext(archivo.filename)
     nombre_seguro = sanitize_name(nombre_base) + sanitize_name(ext).replace("_vacio", "")
-    archivo.save(os.path.join(carpeta_destino, nombre_seguro))
-    return jsonify({"ok": True, "mensaje": f"Presentación '{nombre_seguro}' cargada en {ruta_rel}."})
+    destino_ppt_abs = os.path.join(carpeta_destino, nombre_seguro)
+    archivo.save(destino_ppt_abs)
+
+    copiar_a_backup_local_sin_borrar(ruta_activa, ruta_rel, nombre_seguro, destino_ppt_abs)
+    crear_acceso_directo_escritorio(ruta_activa)
+
+    return jsonify({
+        "ok": True,
+        "mensaje": f"Presentación '{nombre_seguro}' cargada en {ruta_rel} y respaldada en {CARPETA_BACKUP_LOCAL} (sin borrar nada)."
+    })
 
 
 def limpiar_bloqueo_al_salir(ruta_archivo_bloqueo):
@@ -1139,7 +1471,13 @@ def limpiar_bloqueo_al_salir(ruta_archivo_bloqueo):
 
 
 if __name__ == "__main__":
-    cfg, _, _ = cargar_datos_congreso()
+    cfg, _, r_act = cargar_datos_congreso()
+    try:
+        obtener_ruta_backup_local(r_act)
+        crear_acceso_directo_escritorio(r_act)
+    except Exception:
+        pass
+
     ruta_bloq = cfg.get("_ruta_puesto_sesion") if cfg else None
     limpiar_bloqueo_al_salir(ruta_bloq)
     try:

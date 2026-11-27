@@ -24,7 +24,11 @@ jobs:
 
       - name: Compilar ejecutable macOS (Apple Silicon)
         run: |
-          pyinstaller --onefile --windowed --target-arch arm64 --name Congreso_App Congreso_App.py
+          pyinstaller --onefile --windowed \
+            --target-arch arm64 \
+            --collect-all pandas \
+            --collect-all openpyxl \
+            --name Congreso_App Congreso_App.py
 
       - name: Subir artefacto macOS arm64
         uses: actions/upload-artifact@v4
@@ -57,7 +61,12 @@ jobs:
 
       - name: Compilar ejecutable macOS (Intel x86_64)
         run: |
-          pyinstaller --onefile --windowed --target-arch x86_64 --paths deps_x86_64 --name Congreso_App Congreso_App.py
+          pyinstaller --onefile --windowed \
+            --target-arch x86_64 \
+            --paths deps_x86_64 \
+            --collect-all pandas \
+            --collect-all openpyxl \
+            --name Congreso_App Congreso_App.py
 
       - name: Subir artefacto macOS Intel
         uses: actions/upload-artifact@v4
@@ -83,7 +92,10 @@ jobs:
 
       - name: Compilar ejecutable en Windows
         run: |
-          pyinstaller --onefile --windowed --name Congreso_App Congreso_App.py
+          pyinstaller --onefile --windowed \
+            --collect-all pandas \
+            --collect-all openpyxl \
+            --name Congreso_App Congreso_App.py
 
       - name: Subir artefacto Windows
         uses: actions/upload-artifact@v4

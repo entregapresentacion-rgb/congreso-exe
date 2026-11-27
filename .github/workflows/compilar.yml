@@ -1,4 +1,38 @@
-build-macos-intel:
+name: Compilar Congreso_App
+
+on:
+  push:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+jobs:
+  build-macos-arm64:
+    runs-on: macos-latest
+    steps:
+      - name: Descargar repositorio
+        uses: actions/checkout@v4
+
+      - name: Configurar Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Instalar dependencias
+        run: |
+          python -m pip install --upgrade pip
+          pip install pyinstaller pandas openpyxl
+
+      - name: Compilar ejecutable macOS (Apple Silicon)
+        run: |
+          pyinstaller --onefile --windowed --target-arch arm64 --name Congreso_App Congreso_App.py
+
+      - name: Subir artefacto macOS arm64
+        uses: actions/upload-artifact@v4
+        with:
+          name: Congreso_App-macOS-arm64
+          path: dist/Congreso_App*
+
+  build-macos-intel:
     runs-on: macos-latest
     steps:
       - name: Descargar repositorio
@@ -15,7 +49,7 @@ build-macos-intel:
           pip install pyinstaller
           python -m pip install \
             --target deps_x86_64 \
-            --platform macosx_10_9_x86_64 \
+            --platform macosx_10_15_x86_64 \
             --implementation cp \
             --python-version 3.11 \
             --only-binary=:all: \
@@ -30,3 +64,29 @@ build-macos-intel:
         with:
           name: Congreso_App-macOS-Intel
           path: dist/Congreso_App*
+
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - name: Descargar repositorio
+        uses: actions/checkout@v4
+
+      - name: Configurar Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Instalar dependencias
+        run: |
+          python -m pip install --upgrade pip
+          pip install pyinstaller pandas openpyxl
+
+      - name: Compilar ejecutable en Windows
+        run: |
+          pyinstaller --onefile --windowed --name Congreso_App Congreso_App.py
+
+      - name: Subir artefacto Windows
+        uses: actions/upload-artifact@v4
+        with:
+          name: Congreso_App-Windows
+          path: dist/Congreso_App.exe

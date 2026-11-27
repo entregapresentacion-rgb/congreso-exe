@@ -56,6 +56,71 @@ def sanitizar_nombre_carpeta(texto, max_len=None):
     return limpio
 
 
+def _norm_col(texto):
+    s = re.sub(r"[^a-z0-9]+", " ", str(texto or "").lower()).strip()
+    trans = str.maketrans("áéíóúüñ", "aeiouun")
+    return s.translate(trans)
+
+
+def construir_orden_columnas(columnas_excel):
+    """
+    Orden solicitado:
+    1. ESTADO PPT
+    2. CARPETA PONENCIA
+    3. SALA
+    4. DÍA
+    5. HORA INICIO
+    6. HORA FIN
+    7. TÍTULO SESIÓN ES
+    8. Resto de columnas del Excel sin duplicar.
+    """
+    cols_limpias = [str(c).strip() for c in columnas_excel if str(c).strip()]
+    usadas = set()
+
+    def tomar_o_crear(etiqueta_defecto, aliases):
+        for col in cols_limpias:
+            if col in usadas:
+                continue
+            ncol = _norm_col(col)
+            if any(ncol == a or ncol.startswith(a + " ") or (" " + a) in ncol for a in aliases):
+                usadas.add(col)
+                return col
+        return etiqueta_defecto
+
+    prioritarias = [
+        tomar_o_crear("ESTADO PPT", ["estado ppt", "estado_ppt"]),
+        tomar_o_crear("CARPETA PONENCIA", ["carpeta ponencia", "carpeta_ponencia"]),
+        tomar_o_crear("SALA", ["sala"]),
+        tomar_o_crear("DÍA", ["dia", "fecha"]),
+        tomar_o_crear("HORA INICIO", ["hora inicio", "hora_inicio", "inicio"]),
+        tomar_o_crear("HORA FIN", ["hora fin", "hora_fin", "fin"]),
+        tomar_o_crear("TÍTULO SESIÓN ES", ["titulo sesion es", "titulo sesion", "titulo de sesion", "sesion"]),
+    ]
+
+    resto = [col for col in cols_limpias if col not in usadas]
+    return prioritarias + resto
+
+
+def crear_carpetas_ponencia_y_participantes(ruta_carpeta_ponencia, fila, cols_participantes):
+    """
+    Crea la carpeta de la ponencia y una subcarpeta saneada por cada participante
+    presente en esa fila dentro de su espacio en CARPETA PONENCIA.
+    """
+    os.makedirs(ruta_carpeta_ponencia, exist_ok=True)
+    subcarpetas_creadas = []
+    for col in cols_participantes:
+        if col in fila and pd.notna(fila[col]):
+            nombre = str(fila[col]).strip()
+            if nombre:
+                nombre_san = sanitizar_nombre_carpeta(nombre, max_len=80)
+                if nombre_san and nombre_san != "_vacio":
+                    ruta_part = os.path.join(ruta_carpeta_ponencia, nombre_san)
+                    os.makedirs(ruta_part, exist_ok=True)
+                    if ruta_part not in subcarpetas_creadas:
+                        subcarpetas_creadas.append(ruta_part)
+    return subcarpetas_creadas
+
+
 def formatear_dia_valor(valor, day_choice=0):
     if valor is None or (isinstance(valor, float) and pd.isna(valor)):
         return "_sin_fecha"
@@ -322,14 +387,14 @@ HTML_CONFIG = """<!DOCTYPE html>
 
     <nav class="valex-subnav">
         <span class="subnav-item active"><i class="bi bi-sliders"></i> Configurador USB</span>
-        <span class="subnav-item"><i class="bi bi-folder-symlink"></i> Nivel 1 (Sala) · Nivel 2 (DIA NN) · Nivel 3 (≤50c/campo) · Nivel 4</span>
+        <span class="subnav-item"><i class="bi bi-folder-symlink"></i> Nivel 1 (Sala) · Nivel 2 (DIA NN) · Nivel 3 (≤50c/campo) · Nivel 4 (Participantes)</span>
     </nav>
 
     <div class="container-fluid px-4 pt-4" style="max-width: 1280px;">
         <div class="mb-4">
             <h4 class="fw-bold mb-1">Configurador de Paquete USB</h4>
             <p class="mb-0" style="color: var(--text-muted); font-size: 0.88rem;">
-                Estructura integrada: <strong>Sala</strong> → <strong>DIA NN</strong> → <strong>Combinación ordenada (≤50 car./campo)</strong> → <strong>Subcarpetas de participantes</strong>, todo saneado.
+                Orden de tabla: <strong>ESTADO PPT · CARPETA PONENCIA · SALA · DÍA · HORA INICIO · HORA FIN · TÍTULO SESIÓN ES</strong> + resto. Carpetas: <strong>Sala</strong> → <strong>DIA NN</strong> → <strong>Ponencia (≤50c/campo)</strong> → <strong>Subcarpeta por participante</strong>.
             </p>
         </div>
 
@@ -387,7 +452,7 @@ HTML_CONFIG = """<!DOCTYPE html>
                         <div class="valex-card-header">
                             <div>
                                 <h5 class="valex-card-title">Parámetros del Congreso</h5>
-                                <div class="valex-card-subtitle">Elige los campos y ordénalos (arrastrando o con ▲ / ▼); por defecto: HORA INICIO, HORA FIN, TÍTULO SESIÓN, SALA y DÍA</div>
+                                <div class="valex-card-subtitle">Elige los campos y ordénalos; cada participante tendrá su subcarpeta dentro de la carpeta de ponencia</div>
                             </div>
                             <i class="bi bi-sliders text-info fs-5"></i>
                         </div>
@@ -409,7 +474,7 @@ HTML_CONFIG = """<!DOCTYPE html>
                             </div>
 
                             <div class="mb-4">
-                                <label class="form-label">4. Estructura de carpetas dentro de PPT</label>
+                                <label class="form-label">4. Estructura de carpetas y subcarpetas por participante</label>
                                 <div class="row g-3 mb-3">
                                     <div class="col-md-3">
                                         <div class="nivel-box">
@@ -434,7 +499,7 @@ HTML_CONFIG = """<!DOCTYPE html>
                                     <div class="col-md-3">
                                         <div class="nivel-box" style="border-color: rgba(0, 185, 255, 0.35);">
                                             <div class="d-flex justify-content-between align-items-center mb-1">
-                                                <small class="d-block text-info fw-semibold" style="font-size:0.74rem;">NIVEL 3 · ORDEN (≤50c/campo)</small>
+                                                <small class="d-block text-info fw-semibold" style="font-size:0.74rem;">NIVEL 3 · PONENCIA (≤50c)</small>
                                                 <button type="button" class="btn-orden-n3" onclick="restaurarDefectoN3()" title="Restaurar campos por defecto">Reset</button>
                                             </div>
                                             <div id="nivel3Checks" class="multi-cols-box mb-2"></div>
@@ -444,21 +509,25 @@ HTML_CONFIG = """<!DOCTYPE html>
                                     </div>
                                     <div class="col-md-3">
                                         <div class="nivel-box">
-                                            <small class="d-block text-info fw-semibold mb-1" style="font-size:0.74rem;">NIVEL 4 · SUBCARPETAS</small>
+                                            <small class="d-block text-info fw-semibold mb-1" style="font-size:0.74rem;">NIVEL 4 · PARTICIPANTES</small>
                                             <div id="nivel4Checks" class="multi-cols-box">
                                                 <div class="form-check">
                                                     <input class="form-check-input nivel4-chk" type="checkbox" name="nivel_4_cols" value="PARTICIPANTE 1" id="n4_def_1" checked onchange="actualizarVistaPrevia()">
                                                     <label class="form-check-label small" for="n4_def_1">PARTICIPANTE 1</label>
                                                 </div>
+                                                <div class="form-check">
+                                                    <input class="form-check-input nivel4-chk" type="checkbox" name="nivel_4_cols" value="PARTICIPANTE 2" id="n4_def_2" checked onchange="actualizarVistaPrevia()">
+                                                    <label class="form-check-label small" for="n4_def_2">PARTICIPANTE 2</label>
+                                                </div>
                                             </div>
-                                            <small class="d-block text-secondary mt-2" style="font-size:0.7rem;">Crea subcarpeta saneada por cada campo marcado/participante.</small>
+                                            <small class="d-block text-secondary mt-2" style="font-size:0.7rem;">Crea 1 subcarpeta por participante dentro de cada ponencia.</small>
                                         </div>
                                     </div>
                                 </div>
 
                                 <div class="ruta-preview" id="vistaPrevia">
                                     <i class="bi bi-folder-fill text-warning mt-1"></i>
-                                    <span>PPT / SALA / DIA NN (DÍA) / [HORA INICIO(≤50) - HORA FIN(≤50) - TÍTULO SESIÓN(≤50) - SALA(≤50) - DÍA(≤50)] / [Subcarpetas: PARTICIPANTE 1] / archivo.pptx</span>
+                                    <span>PPT / SALA / DIA NN (DÍA) / [HORA INICIO(≤50) - HORA FIN(≤50) - TÍTULO SESIÓN(≤50) - SALA(≤50) - DÍA(≤50)] / [Subcarpeta por participante: PARTICIPANTE 1, PARTICIPANTE 2] / archivo.pptx</span>
                                 </div>
                             </div>
 
@@ -478,7 +547,7 @@ HTML_CONFIG = """<!DOCTYPE html>
                     <div class="valex-card h-100">
                         <div class="valex-card-header">
                             <div>
-                                <h5 class="valex-card-title">Salas Detectadas</h5>
+                                <h5 class="valex-card-title">Salas y Orden de Campos</h5>
                                 <div class="valex-card-subtitle">Previsualización desde el Excel</div>
                             </div>
                             <i class="bi bi-door-open text-info fs-5"></i>
@@ -490,9 +559,9 @@ HTML_CONFIG = """<!DOCTYPE html>
                             <hr style="border-color: var(--border-color);">
                             <p class="small mb-2 text-white fw-semibold">Reglas integradas:</p>
                             <ul class="small mb-0 ps-3" style="color: var(--text-muted);">
-                                <li>Por defecto en Nivel 3: <strong>HORA INICIO</strong>, <strong>HORA FIN</strong>, <strong>TÍTULO SESIÓN</strong>, <strong>SALA</strong> y <strong>DÍA</strong> (incluso tras cargar el Excel).</li>
-                                <li>Marca/desmarca los campos que quieras y reordénalos con <strong>▲ / ▼</strong> o arrastrando.</li>
-                                <li>Sanitización estricta, formato <strong>DIA NN</strong> y truncado a <strong>50 caracteres</strong> por campo.</li>
+                                <li>Orden de columnas en tabla: <strong>ESTADO PPT</strong>, <strong>CARPETA PONENCIA</strong>, <strong>SALA</strong>, <strong>DÍA</strong>, <strong>HORA INICIO</strong>, <strong>HORA FIN</strong>, <strong>TÍTULO SESIÓN ES</strong> y detrás el resto.</li>
+                                <li>Cada participante marcado en Nivel 4 obtiene su propia subcarpeta dentro del espacio de su ponencia.</li>
+                                <li>Sanitización estricta, formato <strong>DIA NN</strong> y truncado a <strong>50 caracteres</strong> por campo en Nivel 3.</li>
                             </ul>
                         </div>
                     </div>
@@ -741,7 +810,7 @@ function actualizarVistaPrevia() {
     if (n1) partes.push(n1);
     if (n2) partes.push(diaNN ? `DIA NN (${n2})` : n2);
     if (n3.cols.length > 0) partes.push(n3.texto);
-    partes.push(n4Cols.length > 0 ? `[Subcarpetas: ${n4Cols.join(', ')}]` : '[Subcarpetas Participantes]');
+    partes.push(n4Cols.length > 0 ? `[Subcarpetas por participante: ${n4Cols.join(', ')}]` : '[Subcarpetas Participantes]');
     partes.push('archivo.pptx');
 
     document.getElementById('vistaPrevia').innerHTML = `<i class="bi bi-folder-fill text-warning mt-1"></i><span>${partes.join(' / ')}</span>`;
@@ -772,6 +841,8 @@ def index():
                 archivo.save(ruta_excel_dest)
 
                 df = pd.read_excel(ruta_excel_dest, engine='openpyxl')
+                orden_columnas_tabla = construir_orden_columnas(df.columns)
+
                 num_admins = int(request.form.get('num_admins', 2))
                 equipos = [f"ADM{i}" for i in range(1, num_admins + 1)]
 
@@ -799,6 +870,7 @@ def index():
 
                 config_data = {
                     "workgroup": sanitize_name(request.form.get('workgroup', 'CONGRESO').strip().upper())[:15],
+                    "orden_columnas_tabla": orden_columnas_tabla,
                     "orden_carpetas": orden_carpetas,
                     "nivel_1": n1,
                     "nivel_2": n2,
@@ -807,6 +879,7 @@ def index():
                     "separador_nivel_3": sep_n3,
                     "max_chars_nivel_3": 50,
                     "nivel_4_columnas": n4_cols,
+                    "subcarpetas_participantes_por_ponencia": True,
                     "equipos": equipos
                 }
 

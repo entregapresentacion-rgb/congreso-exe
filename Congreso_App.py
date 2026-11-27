@@ -4,7 +4,6 @@ import sys
 import json
 import shutil
 import socket
-import traceback
 import platform
 import subprocess
 import datetime as dt
@@ -31,19 +30,6 @@ ORDEN_COLUMNAS_PRIORITARIAS = [
     ("HORA FIN", ["hora fin", "hora_fin", "fin"]),
     ("TÍTULO SESIÓN ES", ["titulo sesion es", "titulo sesion", "titulo de sesion", "sesion"]),
 ]
-
-CONFIG_POR_DEFECTO = {
-    "workgroup": "CONGRESO_RED",
-    "equipos": ["ADM1", "ADM2", "SALA_1", "SALA_2", "AUDITORIUM"],
-    "nivel_1": "",
-    "nivel_2": "",
-    "nivel_3_columnas": [],
-    "nivel_4_columnas": [],
-    "separador_nivel_3": " - ",
-    "max_chars_nivel_3": 50,
-    "formato_dia_nn": True,
-    "orden_carpetas": [],
-}
 
 NOMBRE_BACKUP_LOCAL = "BACKUP_LOCAL"
 
@@ -171,7 +157,7 @@ def crear_acceso_directo_escritorio():
                     '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" '
                     '"http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n'
                     '<plist version="1.0"><dict><key>URL</key><string>'
-                    f'{uri}</string></dict></plist>\n'
+                    f"{uri}</string></dict></plist>\n"
                 )
                 with open(webloc_path, "w", encoding="utf-8") as f:
                     f.write(plist)
@@ -239,23 +225,16 @@ def norm_col(nombre):
     return re.sub(r"[^a-z0-9]+", " ", s).strip()
 
 
-def localizar_carpeta_datos():
-    return obtener_ruta_base()
-
-
 def cargar_datos_congreso():
     ruta_activa = obtener_ruta_base()
     ruta_json = os.path.join(ruta_activa, "config_congreso.json")
     ruta_excel = os.path.join(ruta_activa, "programa.xlsx")
 
-    if not os.path.exists(ruta_excel):
+    if not os.path.exists(ruta_json) or not os.path.exists(ruta_excel):
         return None, None, ruta_activa
 
-    if os.path.exists(ruta_json):
-        with open(ruta_json, "r", encoding="utf-8") as f:
-            config = json.load(f)
-    else:
-        config = dict(CONFIG_POR_DEFECTO)
+    with open(ruta_json, "r", encoding="utf-8") as f:
+        config = json.load(f)
 
     df = pd.read_excel(ruta_excel, engine="openpyxl").fillna("")
 
@@ -270,7 +249,6 @@ def cargar_datos_congreso():
 
     config["_puesto_bloqueado"] = puesto_bloqueado
     config["_ruta_puesto_sesion"] = ruta_puesto_sesion
-    config["_ruta_json"] = ruta_json
     return config, df, ruta_activa
 
 
@@ -467,7 +445,7 @@ def contar_archivos_en_carpeta(ruta_abs):
     return total
 
 
-def abrir_en_explorador(ruta_abs):
+def abrir_carpeta_en_sistema(ruta_abs):
     if SISTEMA == "Windows":
         os.startfile(ruta_abs)
     elif SISTEMA == "Darwin":
@@ -484,563 +462,667 @@ def limpiar_bloqueo_al_salir(ruta_archivo_bloqueo):
         pass
 
 
-class CongresoAppEscritorio(tk.Tk):
-    def __init__(self):
-        super().__init__()
-        self.title("CongresoApp — Escritorio Nativo")
-        self.geometry("1360x840")
-        self.minsize(1050, 680)
-        self.configure(bg="#111726")
+class CongresoAppEscritorio:
+    def __init__(self, root):
+        self.root = root
+        self.root.title("CongresoApp | Agenda por Sesiones")
+        self.root.geometry("1220x780")
+        self.root.configure(bg="#111726")
 
-        self.config_data = None
-        self.df = None
-        self.ruta_activa = obtener_ruta_base()
-        self.sesiones_agrupadas = []
-        self.filas_mostradas = []
+        self.config, self.df, self.ruta_activa = cargar_datos_congreso()
+        self.ruta_backup = obtener_ruta_backup_local()
+        crear_acceso_directo_escritorio()
 
+        self.ruta_bloqueo = self.config.get("_ruta_puesto_sesion") if self.config else None
+        limpiar_bloqueo_al_salir(self.ruta_bloqueo)
+        if self.config is not None:
+            self.config["_puesto_bloqueado"] = None
+
+        self.filas_agenda = []
         self._configurar_estilos()
         self._construir_interfaz()
-        self.recargar_todo()
-        self.protocol("WM_DELETE_WINDOW", self._al_cerrar)
+        self._cargar_agenda()
+        self.root.protocol("WM_DELETE_WINDOW", self._al_cerrar)
 
     def _configurar_estilos(self):
-        style = ttk.Style(self)
-        style.theme_use("clam")
-        style.configure("TNotebook", background="#111726", borderwidth=0)
-        style.configure("TNotebook.Tab", background="#1f2940", foreground="#cbd5e1", padding=[16, 8], font=("Roboto", 11, "bold"))
-        style.map("TNotebook.Tab", background=[("selected", "#0162e8")], foreground=[("selected", "#ffffff")])
-        style.configure("Treeview", background="#151d30", foreground="#f8fafc", fieldbackground="#151d30", rowheight=32, font=("Roboto", 11))
-        style.configure("Treeview.Heading", background="#1f2940", foreground="#38bdf8", font=("Roboto", 11, "bold"))
-        style.map("Treeview", background=[("selected", "#0284c7")])
+        style = ttk.Style(self.root)
+        try:
+            style.theme_use("clam")
+        except Exception:
+            pass
+        style.configure("TNotebook", background="#1f2940", borderwidth=0)
+        style.configure(
+            "TNotebook.Tab",
+            background="#151d30",
+            foreground="#cbd5e1",
+            padding=[14, 8],
+            font=("Roboto", 10, "bold"),
+        )
+        style.map(
+            "TNotebook.Tab",
+            background=[("selected", "#0162e8")],
+            foreground=[("selected", "#ffffff")],
+        )
+        style.configure(
+            "Treeview",
+            background="#151d30",
+            foreground="#f8fafc",
+            fieldbackground="#151d30",
+            rowheight=30,
+            font=("Roboto", 10),
+        )
+        style.configure(
+            "Treeview.Heading",
+            background="#1f2940",
+            foreground="#38bdf8",
+            font=("Roboto", 10, "bold"),
+        )
+        style.map("Treeview", background=[("selected", "#0162e8")], foreground=[("selected", "#ffffff")])
+
+    def _puesto_actual(self):
+        return (self.config or {}).get("_puesto_bloqueado") or ""
+
+    def _es_admin(self):
+        puesto = self._puesto_actual()
+        return (not puesto) or str(puesto).upper().startswith("ADM")
+
+    def _sala_restringida(self):
+        puesto = self._puesto_actual()
+        if not puesto or self._es_admin():
+            return None
+        return sanitize_name(puesto).lower()
 
     def _construir_interfaz(self):
-        top = tk.Frame(self, bg="#1f2940", padx=18, pady=10)
-        top.pack(fill="x")
+        topbar = tk.Frame(self.root, bg="#1f2940", padx=18, pady=10)
+        topbar.pack(fill="x")
 
-        tk.Label(top, text="CongresoApp", bg="#1f2940", fg="#38bdf8", font=("Roboto", 16, "bold")).pack(side="left")
-        self.lbl_estado_top = tk.Label(top, text="", bg="#1f2940", fg="#e2e8f0", font=("Roboto", 11))
+        tk.Label(
+            topbar,
+            text="CongresoApp",
+            bg="#1f2940",
+            fg="#ffffff",
+            font=("Roboto", 16, "bold"),
+        ).pack(side="left")
+
+        ip_local = obtener_ip_local()
+        wg = (self.config or {}).get("workgroup", "N/A")
+        self.lbl_estado_top = tk.Label(
+            topbar,
+            text=f"IP: {ip_local}  |  Grupo: {wg}  |  Backup: {self.ruta_backup}",
+            bg="#1f2940",
+            fg="#94a3b8",
+            font=("Roboto", 9),
+        )
         self.lbl_estado_top.pack(side="right")
 
-        self.notebook = ttk.Notebook(self)
-        self.notebook.pack(fill="both", expand=True, padx=14, pady=12)
+        if self.config is None or self.df is None:
+            aviso = tk.Frame(self.root, bg="#1f2940", padx=24, pady=24)
+            aviso.pack(fill="both", expand=True, padx=20, pady=20)
+            tk.Label(
+                aviso,
+                text="No se encontraron programa.xlsx y config_congreso.json",
+                bg="#1f2940",
+                fg="#fbbf24",
+                font=("Roboto", 14, "bold"),
+            ).pack(pady=(0, 8))
+            tk.Label(
+                aviso,
+                text=f"Colócalos en la misma carpeta del ejecutable:\n{self.ruta_activa}",
+                bg="#1f2940",
+                fg="#e2e8f0",
+                font=("Roboto", 11),
+            ).pack(pady=(0, 16))
+            tk.Button(
+                aviso,
+                text="Reintentar",
+                bg="#0162e8",
+                fg="#ffffff",
+                relief="flat",
+                padx=16,
+                pady=8,
+                command=self._recargar_todo,
+            ).pack()
+            return
 
-        self.tab_agenda = tk.Frame(self.notebook, bg="#111726")
-        self.tab_config = tk.Frame(self.notebook, bg="#111726")
-        self.tab_red = tk.Frame(self.notebook, bg="#111726")
+        notebook = ttk.Notebook(self.root)
+        notebook.pack(fill="both", expand=True, padx=14, pady=12)
 
-        self.notebook.add(self.tab_agenda, text="  Agenda y Ponentes  ")
-        self.notebook.add(self.tab_config, text="  Configurador Congreso  ")
-        self.notebook.add(self.tab_red, text="  Red y Equipos  ")
+        self.tab_agenda = tk.Frame(notebook, bg="#111726")
+        self.tab_red = tk.Frame(notebook, bg="#111726")
+        notebook.add(self.tab_agenda, text="Agenda y Ponentes")
+        notebook.add(self.tab_red, text="Red, Puestos y Backup")
 
         self._construir_tab_agenda()
-        self._construir_tab_configurador()
         self._construir_tab_red()
 
     def _construir_tab_agenda(self):
-        bar_puesto = tk.Frame(self.tab_agenda, bg="#1f2940", padx=14, pady=10)
-        bar_puesto.pack(fill="x", padx=6, pady=(4, 8))
+        puesto_box = tk.Frame(self.tab_agenda, bg="#1f2940", padx=14, pady=10)
+        puesto_box.pack(fill="x", padx=6, pady=(6, 10))
 
-        tk.Label(bar_puesto, text="Puesto:", bg="#1f2940", fg="#94a3b8", font=("Roboto", 11, "bold")).pack(side="left")
-        self.combo_puesto = ttk.Combobox(bar_puesto, state="readonly", width=24, font=("Roboto", 11))
-        self.combo_puesto.pack(side="left", padx=8)
-        self.btn_fijar_puesto = tk.Button(
-            bar_puesto, text="Confirmar y Bloquear", bg="#029666", fg="#fff",
-            font=("Roboto", 10, "bold"), relief="flat", padx=12, pady=5, command=self.fijar_puesto
-        )
-        self.btn_fijar_puesto.pack(side="left", padx=4)
-
-        self.btn_generar_carpetas = tk.Button(
-            bar_puesto, text="Generar Carpetas", bg="#029666", fg="#fff",
-            font=("Roboto", 10, "bold"), relief="flat", padx=12, pady=5, command=self.generar_carpetas
-        )
-        self.btn_generar_carpetas.pack(side="right", padx=4)
-
-        self.btn_abrir_ppt = tk.Button(
-            bar_puesto, text="Carpeta PPT", bg="#0162e8", fg="#fff",
-            font=("Roboto", 10, "bold"), relief="flat", padx=12, pady=5, command=lambda: self.abrir_carpeta_rel("PPT", crear=True)
-        )
-        self.btn_abrir_ppt.pack(side="right", padx=4)
-
-        bar_filtros = tk.Frame(self.tab_agenda, bg="#192238", padx=14, pady=8)
-        bar_filtros.pack(fill="x", padx=6, pady=(0, 8))
-
-        tk.Label(bar_filtros, text="Buscar:", bg="#192238", fg="#e2e8f0", font=("Roboto", 11)).pack(side="left")
-        self.var_busqueda = tk.StringVar()
-        self.var_busqueda.trace_add("write", lambda *_: self.aplicar_filtros())
-        tk.Entry(bar_filtros, textvariable=self.var_busqueda, bg="#151d30", fg="#fff", insertbackground="#fff", font=("Roboto", 11), width=28).pack(side="left", padx=6)
-
-        tk.Label(bar_filtros, text="Día:", bg="#192238", fg="#e2e8f0", font=("Roboto", 11)).pack(side="left", padx=(8, 2))
-        self.combo_dia = ttk.Combobox(bar_filtros, state="readonly", width=14, font=("Roboto", 10))
-        self.combo_dia.pack(side="left", padx=4)
-        self.combo_dia.bind("<<ComboboxSelected>>", lambda *_: self.aplicar_filtros())
-
-        tk.Label(bar_filtros, text="Sala:", bg="#192238", fg="#e2e8f0", font=("Roboto", 11)).pack(side="left", padx=(8, 2))
-        self.combo_sala = ttk.Combobox(bar_filtros, state="readonly", width=22, font=("Roboto", 10))
-        self.combo_sala.pack(side="left", padx=4)
-        self.combo_sala.bind("<<ComboboxSelected>>", lambda *_: self.aplicar_filtros())
-
-        tk.Button(bar_filtros, text="Limpiar", bg="#334155", fg="#fff", font=("Roboto", 10, "bold"), relief="flat", padx=10, pady=4, command=self.limpiar_filtros).pack(side="left", padx=8)
-
-        panel_sesion = tk.Frame(self.tab_agenda, bg="#192642", padx=16, pady=12, highlightbackground="#00b9ff", highlightthickness=1)
-        panel_sesion.pack(fill="x", padx=6, pady=(0, 8))
-        self.lbl_sesion_grande = tk.Label(
-            panel_sesion,
-            text="Selecciona una sesión o ponente para ver su detalle ampliado",
-            bg="#192642",
+        tk.Label(
+            puesto_box,
+            text="Puesto de trabajo:",
+            bg="#1f2940",
             fg="#ffffff",
-            font=("Roboto", 14, "bold"),
-            justify="left",
-            anchor="w",
-            wraplength=1280,
+            font=("Roboto", 10, "bold"),
+        ).pack(side="left", padx=(0, 8))
+
+        equipos = self.config.get("equipos", [])
+        self.combo_puesto = ttk.Combobox(puesto_box, values=equipos, state="readonly", width=22)
+        if equipos:
+            self.combo_puesto.current(0)
+        self.combo_puesto.pack(side="left", padx=(0, 8))
+
+        self.btn_fijar_puesto = tk.Button(
+            puesto_box,
+            text="Confirmar y Bloquear",
+            bg="#029666",
+            fg="#ffffff",
+            relief="flat",
+            padx=12,
+            pady=4,
+            command=self._fijar_puesto,
         )
-        self.lbl_sesion_grande.pack(fill="x")
-        self.lbl_ruta_grande = tk.Label(
-            panel_sesion,
-            text="",
-            bg="#192642",
-            fg="#fbbf24",
-            font=("Consolas", 12),
-            justify="left",
-            anchor="w",
+        self.btn_fijar_puesto.pack(side="left", padx=(0, 14))
+
+        self.lbl_rol_puesto = tk.Label(
+            puesto_box,
+            text="Sin fijar (ADMIN)",
+            bg="#1f2940",
+            fg="#38bdf8",
+            font=("Roboto", 10, "bold"),
         )
-        self.lbl_ruta_grande.pack(fill="x", pady=(4, 0))
+        self.lbl_rol_puesto.pack(side="left")
 
-        cols = ("sesion", "ponente", "estado", "archivos", "carpeta")
-        self.tree = ttk.Treeview(self.tab_agenda, columns=cols, show="headings", selectmode="browse")
-        self.tree.heading("sesion", text="Sesión (Hora / Título / Sala / Día)")
-        self.tree.heading("ponente", text="Participante / Ponente")
-        self.tree.heading("estado", text="Estado PPT")
-        self.tree.heading("archivos", text="Archivos")
-        self.tree.heading("carpeta", text="Subcarpeta")
+        kpi_frame = tk.Frame(self.tab_agenda, bg="#111726")
+        kpi_frame.pack(fill="x", padx=6, pady=(0, 10))
 
-        self.tree.column("sesion", width=460, anchor="w")
-        self.tree.column("ponente", width=240, anchor="w")
-        self.tree.column("estado", width=150, anchor="center")
-        self.tree.column("archivos", width=90, anchor="center")
-        self.tree.column("carpeta", width=360, anchor="w")
+        self.lbl_kpi_sesiones = tk.Label(
+            kpi_frame, text="Sesiones: 0", bg="#0162e8", fg="#ffffff", font=("Roboto", 11, "bold"), padx=14, pady=8
+        )
+        self.lbl_kpi_sesiones.pack(side="left", padx=(0, 10))
 
-        self.tree.pack(fill="both", expand=True, padx=6, pady=(0, 8))
-        self.tree.bind("<<TreeviewSelect>>", self._on_seleccion_tree)
+        self.lbl_kpi_ponentes = tk.Label(
+            kpi_frame, text="Ponentes: 0", bg="#d9264a", fg="#ffffff", font=("Roboto", 11, "bold"), padx=14, pady=8
+        )
+        self.lbl_kpi_ponentes.pack(side="left", padx=(0, 10))
 
-        bar_acc = tk.Frame(self.tab_agenda, bg="#1f2940", padx=14, pady=10)
-        bar_acc.pack(fill="x", padx=6, pady=(0, 4))
+        self.lbl_kpi_cargadas = tk.Label(
+            kpi_frame, text="Cargadas: 0 / 0", bg="#029666", fg="#ffffff", font=("Roboto", 11, "bold"), padx=14, pady=8
+        )
+        self.lbl_kpi_cargadas.pack(side="left", padx=(0, 10))
 
-        tk.Button(bar_acc, text="Abrir Carpeta Ponencia", bg="#334155", fg="#fff", font=("Roboto", 10, "bold"), relief="flat", padx=12, pady=6, command=self.abrir_carpeta_sesion_actual).pack(side="left", padx=4)
-        tk.Button(bar_acc, text="Abrir Subcarpeta Participante", bg="#0162e8", fg="#fff", font=("Roboto", 10, "bold"), relief="flat", padx=12, pady=6, command=self.abrir_subcarpeta_actual).pack(side="left", padx=4)
-        self.btn_subir = tk.Button(bar_acc, text="Subir Presentación (+ Backup)", bg="#029666", fg="#fff", font=("Roboto", 10, "bold"), relief="flat", padx=14, pady=6, command=self.subir_presentacion_actual)
-        self.btn_subir.pack(side="left", padx=4)
-        self.lbl_resumen_kpi = tk.Label(bar_acc, text="", bg="#1f2940", fg="#6ee7b7", font=("Roboto", 11, "bold"))
-        self.lbl_resumen_kpi.pack(side="right")
+        self.lbl_kpi_backup = tk.Label(
+            kpi_frame, text="Backup: 0 arch.", bg="#d95f18", fg="#ffffff", font=("Roboto", 11, "bold"), padx=14, pady=8
+        )
+        self.lbl_kpi_backup.pack(side="left")
 
-    def _construir_tab_configurador(self):
-        marco = tk.Frame(self.tab_config, bg="#1f2940", padx=20, pady=18)
-        marco.pack(fill="both", expand=True, padx=10, pady=10)
+        filtros = tk.Frame(self.tab_agenda, bg="#1f2940", padx=14, pady=10)
+        filtros.pack(fill="x", padx=6, pady=(0, 10))
 
-        tk.Label(marco, text="Configuración del Congreso (config_congreso.json)", bg="#1f2940", fg="#38bdf8", font=("Roboto", 14, "bold")).grid(row=0, column=0, columnspan=2, sticky="w", pady=(0, 12))
+        tk.Label(filtros, text="Buscar:", bg="#1f2940", fg="#e2e8f0", font=("Roboto", 9, "bold")).pack(side="left", padx=(0, 4))
+        self.var_busqueda = tk.StringVar()
+        self.var_busqueda.trace_add("write", lambda *_: self._refrescar_tabla())
+        tk.Entry(filtros, textvariable=self.var_busqueda, bg="#151d30", fg="#ffffff", insertbackground="#ffffff", width=26).pack(
+            side="left", padx=(0, 10)
+        )
 
-        tk.Label(marco, text="Workgroup / Red:", bg="#1f2940", fg="#e2e8f0", font=("Roboto", 11)).grid(row=1, column=0, sticky="w", pady=6)
-        self.ent_workgroup = tk.Entry(marco, bg="#151d30", fg="#fff", font=("Roboto", 11), width=45)
-        self.ent_workgroup.grid(row=1, column=1, sticky="w", pady=6)
+        tk.Label(filtros, text="Día:", bg="#1f2940", fg="#e2e8f0", font=("Roboto", 9, "bold")).pack(side="left", padx=(0, 4))
+        self.var_dia = tk.StringVar(value="Todos")
+        self.combo_dia = ttk.Combobox(filtros, textvariable=self.var_dia, state="readonly", width=14)
+        self.combo_dia.bind("<<ComboboxSelected>>", lambda *_: self._refrescar_tabla())
+        self.combo_dia.pack(side="left", padx=(0, 10))
 
-        tk.Label(marco, text="Equipos (separados por coma):", bg="#1f2940", fg="#e2e8f0", font=("Roboto", 11)).grid(row=2, column=0, sticky="w", pady=6)
-        self.ent_equipos = tk.Entry(marco, bg="#151d30", fg="#fff", font=("Roboto", 11), width=65)
-        self.ent_equipos.grid(row=2, column=1, sticky="w", pady=6)
+        tk.Label(filtros, text="Sala:", bg="#1f2940", fg="#e2e8f0", font=("Roboto", 9, "bold")).pack(side="left", padx=(0, 4))
+        self.var_sala = tk.StringVar(value="Todas")
+        self.combo_sala = ttk.Combobox(filtros, textvariable=self.var_sala, state="readonly", width=22)
+        self.combo_sala.bind("<<ComboboxSelected>>", lambda *_: self._refrescar_tabla())
+        self.combo_sala.pack(side="left", padx=(0, 10))
 
-        tk.Label(marco, text="Columna Nivel 1 (Sala):", bg="#1f2940", fg="#e2e8f0", font=("Roboto", 11)).grid(row=3, column=0, sticky="w", pady=6)
-        self.combo_n1 = ttk.Combobox(marco, width=42, font=("Roboto", 11))
-        self.combo_n1.grid(row=3, column=1, sticky="w", pady=6)
+        tk.Label(filtros, text="Estado:", bg="#1f2940", fg="#e2e8f0", font=("Roboto", 9, "bold")).pack(side="left", padx=(0, 4))
+        self.var_estado = tk.StringVar(value="Todos")
+        self.combo_estado = ttk.Combobox(
+            filtros, textvariable=self.var_estado, values=["Todos", "CARGADA", "PENDIENTE"], state="readonly", width=13
+        )
+        self.combo_estado.bind("<<ComboboxSelected>>", lambda *_: self._refrescar_tabla())
+        self.combo_estado.pack(side="left", padx=(0, 10))
 
-        tk.Label(marco, text="Columna Nivel 2 (Día):", bg="#1f2940", fg="#e2e8f0", font=("Roboto", 11)).grid(row=4, column=0, sticky="w", pady=6)
-        self.combo_n2 = ttk.Combobox(marco, width=42, font=("Roboto", 11))
-        self.combo_n2.grid(row=4, column=1, sticky="w", pady=6)
+        tk.Button(
+            filtros, text="Limpiar", bg="#334155", fg="#ffffff", relief="flat", padx=10, pady=3, command=self._limpiar_filtros
+        ).pack(side="left")
 
-        tk.Label(marco, text="Columnas Nivel 3 (separadas por coma):", bg="#1f2940", fg="#e2e8f0", font=("Roboto", 11)).grid(row=5, column=0, sticky="w", pady=6)
-        self.ent_n3 = tk.Entry(marco, bg="#151d30", fg="#fff", font=("Roboto", 11), width=65)
-        self.ent_n3.grid(row=5, column=1, sticky="w", pady=6)
+        tabla_frame = tk.Frame(self.tab_agenda, bg="#111726")
+        tabla_frame.pack(fill="both", expand=True, padx=6, pady=(0, 10))
 
-        tk.Label(marco, text="Columnas Nivel 4 Ponentes (separadas por coma):", bg="#1f2940", fg="#e2e8f0", font=("Roboto", 11)).grid(row=6, column=0, sticky="w", pady=6)
-        self.ent_n4 = tk.Entry(marco, bg="#151d30", fg="#fff", font=("Roboto", 11), width=65)
-        self.ent_n4.grid(row=6, column=1, sticky="w", pady=6)
+        columnas = ("estado", "participante", "sesion", "sala", "dia", "carpeta")
+        self.tree = ttk.Treeview(tabla_frame, columns=columnas, show="headings", selectmode="browse")
+        self.tree.heading("estado", text="ESTADO")
+        self.tree.heading("participante", text="PARTICIPANTE / PONENTE")
+        self.tree.heading("sesion", text="SESIÓN")
+        self.tree.heading("sala", text="SALA")
+        self.tree.heading("dia", text="DÍA")
+        self.tree.heading("carpeta", text="SUBCARPETA PPT")
 
-        tk.Label(marco, text="Separador Nivel 3:", bg="#1f2940", fg="#e2e8f0", font=("Roboto", 11)).grid(row=7, column=0, sticky="w", pady=6)
-        self.ent_sep = tk.Entry(marco, bg="#151d30", fg="#fff", font=("Roboto", 11), width=20)
-        self.ent_sep.grid(row=7, column=1, sticky="w", pady=6)
+        self.tree.column("estado", width=120, anchor="center")
+        self.tree.column("participante", width=230)
+        self.tree.column("sesion", width=340)
+        self.tree.column("sala", width=170)
+        self.tree.column("dia", width=100, anchor="center")
+        self.tree.column("carpeta", width=240)
 
-        self.var_formato_dia = tk.BooleanVar(value=True)
-        tk.Checkbutton(marco, text="Formatear días como DIA NN", variable=self.var_formato_dia, bg="#1f2940", fg="#e2e8f0", selectcolor="#151d30", font=("Roboto", 11)).grid(row=8, column=1, sticky="w", pady=8)
+        scroll_y = ttk.Scrollbar(tabla_frame, orient="vertical", command=self.tree.yview)
+        self.tree.configure(yscrollcommand=scroll_y.set)
+        self.tree.pack(side="left", fill="both", expand=True)
+        scroll_y.pack(side="right", fill="y")
 
-        tk.Button(marco, text="Guardar Configuración", bg="#029666", fg="#fff", font=("Roboto", 11, "bold"), relief="flat", padx=18, pady=8, command=self.guardar_configuracion).grid(row=9, column=1, sticky="w", pady=14)
+        acciones = tk.Frame(self.tab_agenda, bg="#1f2940", padx=14, pady=10)
+        acciones.pack(fill="x", padx=6, pady=(0, 6))
+
+        self.btn_generar = tk.Button(
+            acciones,
+            text="Generar Carpetas",
+            bg="#029666",
+            fg="#ffffff",
+            relief="flat",
+            padx=12,
+            pady=6,
+            command=self._generar_carpetas,
+        )
+        self.btn_generar.pack(side="left", padx=(0, 8))
+
+        tk.Button(
+            acciones,
+            text="Abrir Carpeta PPT",
+            bg="#0162e8",
+            fg="#ffffff",
+            relief="flat",
+            padx=12,
+            pady=6,
+            command=lambda: self._abrir_carpeta_rel("PPT"),
+        ).pack(side="left", padx=(0, 8))
+
+        tk.Button(
+            acciones,
+            text="Abrir Subcarpeta Seleccionada",
+            bg="#2563eb",
+            fg="#ffffff",
+            relief="flat",
+            padx=12,
+            pady=6,
+            command=self._abrir_subcarpeta_seleccionada,
+        ).pack(side="left", padx=(0, 8))
+
+        self.btn_subir = tk.Button(
+            acciones,
+            text="Subir Presentación...",
+            bg="#059669",
+            fg="#ffffff",
+            relief="flat",
+            padx=12,
+            pady=6,
+            command=self._subir_presentacion,
+        )
+        self.btn_subir.pack(side="left", padx=(0, 8))
+
+        tk.Button(
+            acciones,
+            text="Actualizar Estado",
+            bg="#475569",
+            fg="#ffffff",
+            relief="flat",
+            padx=12,
+            pady=6,
+            command=self._cargar_agenda,
+        ).pack(side="right")
 
     def _construir_tab_red(self):
-        marco = tk.Frame(self.tab_red, bg="#1f2940", padx=20, pady=18)
-        marco.pack(fill="both", expand=True, padx=10, pady=10)
+        panel = tk.Frame(self.tab_red, bg="#1f2940", padx=20, pady=20)
+        panel.pack(fill="both", expand=True, padx=10, pady=10)
 
-        tk.Label(marco, text="Estado de Red, Equipos y Backup Local", bg="#1f2940", fg="#38bdf8", font=("Roboto", 14, "bold")).pack(anchor="w", pady=(0, 10))
-        self.txt_red = tk.Text(marco, bg="#151d30", fg="#e2e8f0", font=("Consolas", 11), height=22, relief="flat", padx=14, pady=12)
-        self.txt_red.pack(fill="both", expand=True)
-        tk.Button(marco, text="Refrescar Estado de Red y Backup", bg="#0162e8", fg="#fff", font=("Roboto", 10, "bold"), relief="flat", padx=14, pady=6, command=self.refrescar_panel_red).pack(anchor="w", pady=(10, 0))
+        tk.Label(
+            panel,
+            text="Estado de Equipo, Rutas y Backup Local",
+            bg="#1f2940",
+            fg="#ffffff",
+            font=("Roboto", 13, "bold"),
+        ).pack(anchor="w", pady=(0, 12))
 
-    def _es_admin(self):
-        puesto = (self.config_data or {}).get("_puesto_bloqueado") or ""
-        return (not puesto) or str(puesto).upper().startswith("ADM")
+        self.txt_red = tk.Text(
+            panel,
+            bg="#151d30",
+            fg="#e2e8f0",
+            font=("Consolas", 10),
+            height=22,
+            relief="flat",
+            padx=14,
+            pady=14,
+        )
+        self.txt_red.pack(fill="both", expand=True, pady=(0, 12))
 
-    def recargar_todo(self):
-        try:
-            obtener_ruta_backup_local()
-            crear_acceso_directo_escritorio()
-            config, df, ruta_activa = cargar_datos_congreso()
-            self.config_data = config
-            self.df = df
-            self.ruta_activa = ruta_activa
+        tk.Button(
+            panel,
+            text="Abrir Carpeta BACKUP_LOCAL",
+            bg="#0162e8",
+            fg="#ffffff",
+            relief="flat",
+            padx=14,
+            pady=6,
+            command=lambda: abrir_carpeta_en_sistema(self.ruta_backup),
+        ).pack(side="left", padx=(0, 8))
 
-            if config is None or df is None:
-                self.lbl_estado_top.config(text=f"No se encontró programa.xlsx en {ruta_activa}")
-                self.refrescar_panel_red()
-                return
+        tk.Button(
+            panel,
+            text="Refrescar Información",
+            bg="#475569",
+            fg="#ffffff",
+            relief="flat",
+            padx=14,
+            pady=6,
+            command=self._actualizar_info_red,
+        ).pack(side="left")
 
-            columnas_raw = list(df.columns)
-            n3_cols = resolver_columnas_nivel_3(config, columnas_raw)
-            if n3_cols:
-                df = df.sort_values(
-                    by=n3_cols,
-                    key=lambda s: s.astype(str).str.replace("\xa0", " ", regex=False).str.lower().str.strip(),
-                    kind="mergesort",
-                )
+    def _actualizar_permisos_ui(self):
+        es_adm = self._es_admin()
+        puesto = self._puesto_actual()
+        if puesto:
+            self.lbl_rol_puesto.config(
+                text=f"Bloqueado en {puesto} ({'ADMIN' if es_adm else 'SALA - SOLO LECTURA'})",
+                fg="#48d6a8" if es_adm else "#fbbf24",
+            )
+            self.btn_fijar_puesto.config(state="disabled")
+            self.combo_puesto.config(state="disabled")
+        else:
+            self.lbl_rol_puesto.config(text="Sin fijar (ADMIN)", fg="#38bdf8")
 
-            col_sala = config.get("nivel_1") or buscar_columna(columnas_raw, ["sala"])
-            col_dia = config.get("nivel_2") or buscar_columna(columnas_raw, ["dia", "fecha"])
-            formato_dia_nn = bool(config.get("formato_dia_nn", True))
+        self.btn_generar.config(state="normal" if es_adm else "disabled")
+        self.btn_subir.config(state="normal" if es_adm else "disabled")
 
-            puesto_bloq = config.get("_puesto_bloqueado") or ""
-            es_adm = self._es_admin()
-            sala_restringida = None if (not puesto_bloq or es_adm) else sanitize_name(puesto_bloq)
+        sala_bloq = self._sala_restringida()
+        if sala_bloq:
+            for idx, val in enumerate(self.combo_sala["values"]):
+                if val.lower() == sala_bloq:
+                    self.combo_sala.current(idx)
+                    break
+            self.combo_sala.config(state="disabled")
+        else:
+            self.combo_sala.config(state="readonly")
 
-            equipos = config.get("equipos", [])
-            self.combo_puesto["values"] = equipos
-            if puesto_bloq:
-                self.combo_puesto.set(puesto_bloq)
-                self.combo_puesto.config(state="disabled")
-                self.btn_fijar_puesto.config(state="disabled")
-            else:
-                self.combo_puesto.config(state="readonly")
-                self.btn_fijar_puesto.config(state="normal")
+    def _fijar_puesto(self):
+        puesto = self.combo_puesto.get().strip()
+        if not puesto:
+            return
+        if self.ruta_bloqueo:
+            with open(self.ruta_bloqueo, "w", encoding="utf-8") as fp:
+                json.dump({"puesto": puesto}, fp)
+        self.config["_puesto_bloqueado"] = puesto
+        self._actualizar_permisos_ui()
+        self._refrescar_tabla()
+        messagebox.showinfo("Puesto fijado", f"Puesto '{puesto}' fijado para esta sesión.")
 
-            self.btn_generar_carpetas.config(state="normal" if es_adm else "disabled")
-            self.btn_subir.config(state="normal" if es_adm else "disabled")
+    def _cargar_agenda(self):
+        if self.config is None or self.df is None:
+            return
 
-            sesiones_map = {}
-            sesiones_lista = []
-            dias_unicos = []
-            salas_unicas = []
-
-            for _, row in df.iterrows():
-                ruta_sesion = construir_ruta_sesion(row, config, columnas_raw)
-                sala_val = sanitize_name(row[col_sala]) if (col_sala and col_sala in row and str(row[col_sala]).strip()) else ""
-                if sala_val == "_vacio":
-                    sala_val = ""
-                raw_dia = row[col_dia] if col_dia and col_dia in row else ""
-                dia_val = formatear_dia_valor(raw_dia) if (col_dia and formato_dia_nn) else (str(raw_dia).strip() or "Sin Día")
-
-                if dia_val and dia_val not in dias_unicos:
-                    dias_unicos.append(dia_val)
-                if sala_val and sala_val not in salas_unicas:
-                    salas_unicas.append(sala_val)
-
-                if ruta_sesion not in sesiones_map:
-                    resumen_partes = []
-                    for c in n3_cols:
-                        if c in row and str(row[c]).strip():
-                            resumen_partes.append(f"{c}: {str(row[c]).strip()}")
-                    if sala_val:
-                        resumen_partes.append(f"Sala: {sala_val}")
-                    if dia_val:
-                        resumen_partes.append(f"Día: {dia_val}")
-
-                    sesion_obj = {
-                        "ruta_sesion": ruta_sesion,
-                        "sala": sala_val,
-                        "dia": dia_val,
-                        "titulo_grande": "  |  ".join(resumen_partes) if resumen_partes else ruta_sesion,
-                        "ponentes": [],
-                        "_vistos": set(),
-                    }
-                    sesiones_map[ruta_sesion] = sesion_obj
-                    sesiones_lista.append(sesion_obj)
-                else:
-                    sesion_obj = sesiones_map[ruta_sesion]
-
-                participantes = obtener_participantes_fila(row, columnas_raw, config) or ["Sin ponente"]
-                for p in participantes:
-                    p_san = sanitize_name(p)
-                    clave_p = re.sub(r"\s+", " ", p_san.lower()).strip()
-                    if clave_p in sesion_obj["_vistos"]:
-                        continue
-                    sesion_obj["_vistos"].add(clave_p)
-                    ruta_carpeta = os.path.join(ruta_sesion, p_san) if p_san != "_vacio" else ruta_sesion
-                    num_arch = contar_archivos_en_carpeta(os.path.join(ruta_activa, ruta_carpeta))
-                    sesion_obj["ponentes"].append({
-                        "ponente": p,
-                        "ruta_sesion": ruta_sesion,
-                        "ruta_carpeta": ruta_carpeta,
-                        "sala": sala_val,
-                        "dia": dia_val,
-                        "titulo_grande": sesion_obj["titulo_grande"],
-                        "tiene_ppt": num_arch > 0,
-                        "num_archivos": num_arch,
-                    })
-
-            self.sesiones_agrupadas = sesiones_lista
-
-            self.combo_dia["values"] = [""] + dias_unicos
-            self.combo_dia.set("")
-            if sala_restringida:
-                self.combo_sala["values"] = [sala_restringida]
-                self.combo_sala.set(sala_restringida)
-                self.combo_sala.config(state="disabled")
-            else:
-                self.combo_sala["values"] = [""] + salas_unicas
-                self.combo_sala.set("")
-                self.combo_sala.config(state="readonly")
-
-            self.lbl_estado_top.config(
-                text=f"IP: {obtener_ip_local()}  |  Puesto: {puesto_bloq or 'Sin fijar'} ({'ADMIN' if es_adm else 'SALA'})  |  Backup: {obtener_ruta_backup_local()}"
+        columnas_raw = list(self.df.columns)
+        n3_cols = resolver_columnas_nivel_3(self.config, columnas_raw)
+        df_ordenado = self.df
+        if n3_cols:
+            df_ordenado = self.df.sort_values(
+                by=n3_cols,
+                key=lambda s: s.astype(str).str.replace("\xa0", " ", regex=False).str.lower().str.strip(),
+                kind="mergesort",
             )
 
-            self.ent_workgroup.delete(0, "end")
-            self.ent_workgroup.insert(0, config.get("workgroup", "CONGRESO_RED"))
-            self.ent_equipos.delete(0, "end")
-            self.ent_equipos.insert(0, ", ".join(config.get("equipos", [])))
-            self.combo_n1["values"] = [""] + columnas_raw
-            self.combo_n1.set(config.get("nivel_1", ""))
-            self.combo_n2["values"] = [""] + columnas_raw
-            self.combo_n2.set(config.get("nivel_2", ""))
-            self.ent_n3.delete(0, "end")
-            self.ent_n3.insert(0, ", ".join(config.get("nivel_3_columnas", [])))
-            self.ent_n4.delete(0, "end")
-            self.ent_n4.insert(0, ", ".join(config.get("nivel_4_columnas", [])))
-            self.ent_sep.delete(0, "end")
-            self.ent_sep.insert(0, config.get("separador_nivel_3", " - "))
-            self.var_formato_dia.set(bool(config.get("formato_dia_nn", True)))
+        col_sala = self.config.get("nivel_1") or buscar_columna(columnas_raw, ["sala"])
+        col_dia = self.config.get("nivel_2") or buscar_columna(columnas_raw, ["dia", "fecha"])
+        formato_dia_nn = bool(self.config.get("formato_dia_nn", True))
 
-            self.aplicar_filtros()
-            self.refrescar_panel_red()
-        except Exception:
-            messagebox.showerror("Error", traceback.format_exc())
+        sesiones_map = {}
+        dias_unicos = ["Todos"]
+        salas_unicas = ["Todas"]
+        filas = []
 
-    def aplicar_filtros(self):
-        q = self.var_busqueda.get().lower().strip()
-        f_dia = self.combo_dia.get().lower().strip()
-        f_sala = self.combo_sala.get().lower().strip()
+        for _, row in df_ordenado.iterrows():
+            ruta_sesion = construir_ruta_sesion(row, self.config, columnas_raw)
+            sala_val = sanitize_name(row[col_sala]) if (col_sala and col_sala in row and str(row[col_sala]).strip()) else ""
+            if sala_val == "_vacio":
+                sala_val = ""
+            raw_dia = row[col_dia] if col_dia and col_dia in row else ""
+            dia_val = formatear_dia_valor(raw_dia) if (col_dia and formato_dia_nn) else (str(raw_dia).strip() or "Sin Día")
 
+            if dia_val and dia_val not in dias_unicos:
+                dias_unicos.append(dia_val)
+            if sala_val and sala_val not in salas_unicas:
+                salas_unicas.append(sala_val)
+
+            if ruta_sesion not in sesiones_map:
+                campos_txt = []
+                for c in n3_cols:
+                    if c in row and str(row[c]).strip():
+                        campos_txt.append(f"{c}: {str(row[c]).replace(chr(160), ' ').strip()}")
+                sesiones_map[ruta_sesion] = {
+                    "titulo": " | ".join(campos_txt) if campos_txt else ruta_sesion,
+                    "vistos": set(),
+                }
+
+            sesion_info = sesiones_map[ruta_sesion]
+            participantes = obtener_participantes_fila(row, columnas_raw, self.config) or ["Sin ponente"]
+            datos_fila = " ".join(str(row[c]).replace("\xa0", " ") for c in columnas_raw if c in row)
+
+            for p in participantes:
+                p_san = sanitize_name(p)
+                clave_p = re.sub(r"\s+", " ", p_san.lower()).strip()
+                if clave_p in sesion_info["vistos"]:
+                    continue
+                sesion_info["vistos"].add(clave_p)
+
+                ruta_carpeta = os.path.join(ruta_sesion, p_san) if p_san != "_vacio" else ruta_sesion
+                ruta_abs = os.path.join(self.ruta_activa, ruta_carpeta)
+                num_archivos = contar_archivos_en_carpeta(ruta_abs)
+                estado = f"CARGADA ({num_archivos})" if num_archivos > 0 else "PENDIENTE"
+
+                filas.append({
+                    "estado": estado,
+                    "es_cargada": num_archivos > 0,
+                    "participante": p,
+                    "sesion": sesion_info["titulo"],
+                    "ruta_sesion": ruta_sesion,
+                    "sala": sala_val,
+                    "dia": dia_val,
+                    "carpeta": ruta_carpeta,
+                    "busqueda": f"{p} {sesion_info['titulo']} {sala_val} {dia_val} {ruta_carpeta} {datos_fila}".lower(),
+                })
+
+        self.filas_agenda = filas
+        self.combo_dia["values"] = dias_unicos
+        if self.var_dia.get() not in dias_unicos:
+            self.var_dia.set("Todos")
+
+        self.combo_sala["values"] = salas_unicas
+        if self.var_sala.get() not in salas_unicas:
+            self.var_sala.set("Todas")
+
+        self._actualizar_permisos_ui()
+        self._refrescar_tabla()
+        self._actualizar_info_red()
+
+    def _refrescar_tabla(self):
         for item in self.tree.get_children():
             self.tree.delete(item)
-        self.filas_mostradas = []
 
-        cargados = 0
-        total = 0
+        q = self.var_busqueda.get().lower().strip()
+        dia_sel = self.var_dia.get()
+        sala_sel = self.var_sala.get()
+        estado_sel = self.var_estado.get()
+        sala_bloq = self._sala_restringida()
 
-        for sesion in self.sesiones_agrupadas:
-            if f_dia and sesion["dia"].lower() != f_dia:
+        sesiones_visibles = set()
+        ponentes_visibles = 0
+        cargadas_visibles = 0
+
+        for f in self.filas_agenda:
+            if sala_bloq and f["sala"].lower() != sala_bloq:
                 continue
-            if f_sala and sesion["sala"].lower() != f_sala:
+            if sala_sel and sala_sel != "Todas" and f["sala"] != sala_sel:
+                continue
+            if dia_sel and dia_sel != "Todos" and f["dia"] != dia_sel:
+                continue
+            if estado_sel == "CARGADA" and not f["es_cargada"]:
+                continue
+            if estado_sel == "PENDIENTE" and f["es_cargada"]:
+                continue
+            if q and q not in f["busqueda"]:
                 continue
 
-            for p in sesion["ponentes"]:
-                total += 1
-                if p["tiene_ppt"]:
-                    cargados += 1
-                texto = f"{sesion['titulo_grande']} {sesion['ruta_sesion']} {p['ponente']} {p['ruta_carpeta']}".lower()
-                if q and q not in texto:
-                    continue
-                idx = len(self.filas_mostradas)
-                self.filas_mostradas.append(p)
-                estado_txt = f"CARGADA ({p['num_archivos']})" if p["tiene_ppt"] else "PENDIENTE"
-                self.tree.insert("", "end", iid=str(idx), values=(sesion["titulo_grande"], p["ponente"], estado_txt, p["num_archivos"], p["ruta_carpeta"]))
+            self.tree.insert(
+                "",
+                "end",
+                values=(f["estado"], f["participante"], f["sesion"], f["sala"], f["dia"], f["carpeta"]),
+            )
+            sesiones_visibles.add(f["ruta_sesion"])
+            ponentes_visibles += 1
+            if f["es_cargada"]:
+                cargadas_visibles += 1
 
-        arch_bk = contar_archivos_en_carpeta(obtener_ruta_backup_local())
-        self.lbl_resumen_kpi.config(text=f"Cargadas: {cargados}/{total}  |  Backup Local: {arch_bk} archivos")
+        archivos_bk = contar_archivos_en_carpeta(self.ruta_backup)
+        self.lbl_kpi_sesiones.config(text=f"Sesiones: {len(sesiones_visibles)}")
+        self.lbl_kpi_ponentes.config(text=f"Ponentes: {ponentes_visibles}")
+        self.lbl_kpi_cargadas.config(text=f"Cargadas: {cargadas_visibles} / {ponentes_visibles}")
+        self.lbl_kpi_backup.config(text=f"Backup: {archivos_bk} arch.")
 
-        if self.filas_mostradas:
-            self.tree.selection_set("0")
-            self._mostrar_detalle_fila(self.filas_mostradas[0])
-        else:
-            self.lbl_sesion_grande.config(text="Sin resultados con el filtro actual")
-            self.lbl_ruta_grande.config(text="")
-
-    def _on_seleccion_tree(self, _event=None):
-        sel = self.tree.selection()
-        if not sel:
-            return
-        idx = int(sel[0])
-        if 0 <= idx < len(self.filas_mostradas):
-            self._mostrar_detalle_fila(self.filas_mostradas[idx])
-
-    def _mostrar_detalle_fila(self, fila):
-        self.lbl_sesion_grande.config(text=fila["titulo_grande"])
-        self.lbl_ruta_grande.config(text=f"Carpeta ponencia: {fila['ruta_sesion']}   |   Subcarpeta: {fila['ruta_carpeta']}   |   Ponente: {fila['ponente']}")
-
-    def _fila_seleccionada(self):
-        sel = self.tree.selection()
-        if not sel:
-            return None
-        idx = int(sel[0])
-        return self.filas_mostradas[idx] if 0 <= idx < len(self.filas_mostradas) else None
-
-    def limpiar_filtros(self):
+    def _limpiar_filtros(self):
         self.var_busqueda.set("")
-        self.combo_dia.set("")
-        if str(self.combo_sala["state"]) != "disabled":
-            self.combo_sala.set("")
-        self.aplicar_filtros()
+        self.var_dia.set("Todos")
+        if not self._sala_restringida():
+            self.var_sala.set("Todas")
+        self.var_estado.set("Todos")
+        self._refrescar_tabla()
 
-    def fijar_puesto(self):
-        puesto = self.combo_puesto.get().strip()
-        if not puesto or not self.config_data:
-            return
-        with open(self.config_data["_ruta_puesto_sesion"], "w", encoding="utf-8") as fp:
-            json.dump({"puesto": puesto}, fp)
-        messagebox.showinfo("Puesto fijado", f"Puesto '{puesto}' confirmado y bloqueado para esta sesión.")
-        self.recargar_todo()
-
-    def generar_carpetas(self):
+    def _generar_carpetas(self):
         if not self._es_admin():
-            messagebox.showwarning("Permisos", "Solo los puestos ADMIN pueden generar carpetas.")
-            return
-        if self.config_data is None or self.df is None:
+            messagebox.showwarning("Solo lectura", "Solo los puestos ADMIN pueden generar carpetas.")
             return
 
-        obtener_ruta_backup_local()
-        crear_acceso_directo_escritorio()
         columnas_raw = list(self.df.columns)
         creadas = 0
-        vistas = set()
+        rutas_creadas = set()
 
         for _, row in self.df.iterrows():
-            ruta_sesion = construir_ruta_sesion(row, self.config_data, columnas_raw)
+            ruta_sesion = construir_ruta_sesion(row, self.config, columnas_raw)
             ruta_abs = os.path.join(self.ruta_activa, ruta_sesion)
-            if ruta_abs not in vistas and not os.path.exists(ruta_abs):
+            if ruta_abs not in rutas_creadas and not os.path.exists(ruta_abs):
                 os.makedirs(ruta_abs, exist_ok=True)
-                vistas.add(ruta_abs)
+                rutas_creadas.add(ruta_abs)
                 creadas += 1
-            for p in obtener_participantes_fila(row, columnas_raw, self.config_data):
+
+            for p in obtener_participantes_fila(row, columnas_raw, self.config):
                 p_san = sanitize_name(p)
                 if p_san == "_vacio":
                     continue
                 p_abs = os.path.join(ruta_abs, p_san)
-                if p_abs not in vistas and not os.path.exists(p_abs):
+                if p_abs not in rutas_creadas and not os.path.exists(p_abs):
                     os.makedirs(p_abs, exist_ok=True)
-                    vistas.add(p_abs)
+                    rutas_creadas.add(p_abs)
                     creadas += 1
 
-        copiados = sincronizar_estructura_backup_local(self.ruta_activa)
-        messagebox.showinfo("Carpetas listas", f"Carpetas nuevas: {creadas}. Backup sincronizado ({copiados} archivos nuevos, sin borrar nada).")
-        self.recargar_todo()
+        copiados_bk = sincronizar_estructura_backup_local(self.ruta_activa)
+        self._cargar_agenda()
+        messagebox.showinfo(
+            "Carpetas generadas",
+            f"Carpetas listas ({creadas} nuevas). Backup sincronizado ({copiados_bk} archivos copiados).",
+        )
 
-    def abrir_carpeta_rel(self, ruta_rel, crear=True):
+    def _abrir_carpeta_rel(self, ruta_rel):
         ruta_abs = os.path.join(self.ruta_activa, ruta_rel)
-        if crear and self._es_admin():
+        if self._es_admin():
             os.makedirs(ruta_abs, exist_ok=True)
         elif not os.path.exists(ruta_abs):
-            messagebox.showwarning("Carpeta no existe", f"No existe: {ruta_abs}")
+            messagebox.showwarning("Carpeta no existe", "La carpeta aún no existe en disco.")
             return
-        abrir_en_explorador(ruta_abs)
+        abrir_carpeta_en_sistema(ruta_abs)
 
-    def abrir_carpeta_sesion_actual(self):
-        fila = self._fila_seleccionada()
-        if fila:
-            self.abrir_carpeta_rel(fila["ruta_sesion"], crear=True)
+    def _abrir_subcarpeta_seleccionada(self):
+        sel = self.tree.selection()
+        if not sel:
+            messagebox.showinfo("Selección", "Selecciona primero una fila de la agenda.")
+            return
+        valores = self.tree.item(sel[0], "values")
+        if len(valores) >= 6:
+            self._abrir_carpeta_rel(valores[5])
 
-    def abrir_subcarpeta_actual(self):
-        fila = self._fila_seleccionada()
-        if fila:
-            self.abrir_carpeta_rel(fila["ruta_carpeta"], crear=True)
-
-    def subir_presentacion_actual(self):
+    def _subir_presentacion(self):
         if not self._es_admin():
-            messagebox.showwarning("Permisos", "Solo los puestos ADMIN pueden subir presentaciones.")
+            messagebox.showwarning("Solo lectura", "Solo los puestos ADMIN pueden subir presentaciones.")
             return
-        fila = self._fila_seleccionada()
-        if not fila:
-            messagebox.showwarning("Selección", "Selecciona primero un participante en la agenda.")
+        sel = self.tree.selection()
+        if not sel:
+            messagebox.showinfo("Selección", "Selecciona primero una fila de la agenda.")
+            return
+        valores = self.tree.item(sel[0], "values")
+        ruta_rel = valores[5]
+        archivo_origen = filedialog.askopenfilename(title="Seleccionar presentación")
+        if not archivo_origen:
             return
 
-        origen = filedialog.askopenfilename(title=f"Seleccionar presentación para {fila['ponente']}")
-        if not origen:
-            return
-
-        carpeta_destino = os.path.join(self.ruta_activa, fila["ruta_carpeta"])
+        carpeta_destino = os.path.join(self.ruta_activa, ruta_rel)
         os.makedirs(carpeta_destino, exist_ok=True)
-        nombre_base, ext = os.path.splitext(os.path.basename(origen))
+        nombre_base, ext = os.path.splitext(os.path.basename(archivo_origen))
         nombre_seguro = sanitize_name(nombre_base) + sanitize_name(ext).replace("_vacio", "")
-        destino_ppt = os.path.join(carpeta_destino, nombre_seguro)
-        shutil.copy2(origen, destino_ppt)
+        destino_ppt_abs = os.path.join(carpeta_destino, nombre_seguro)
+        shutil.copy2(archivo_origen, destino_ppt_abs)
 
-        ruta_bk_copia = copiar_a_backup_local_sin_borrar(fila["ruta_carpeta"], nombre_seguro, destino_ppt)
+        copia_bk = copiar_a_backup_local_sin_borrar(ruta_rel, nombre_seguro, destino_ppt_abs)
         crear_acceso_directo_escritorio()
+        self._cargar_agenda()
+        messagebox.showinfo(
+            "Presentación cargada",
+            f"Guardada en:\n{destino_ppt_abs}\n\nCopia de seguridad en:\n{copia_bk}",
+        )
 
-        messagebox.showinfo("Presentación cargada", f"Guardado en:\n{destino_ppt}\n\nCopia de respaldo en:\n{ruta_bk_copia}")
-        self.recargar_todo()
-
-    def guardar_configuracion(self):
-        base_cfg = dict(CONFIG_POR_DEFECTO)
-        if self.config_data:
-            for k, v in self.config_data.items():
-                if not str(k).startswith("_"):
-                    base_cfg[k] = v
-
-        base_cfg["workgroup"] = self.ent_workgroup.get().strip() or "CONGRESO_RED"
-        base_cfg["equipos"] = [x.strip() for x in self.ent_equipos.get().split(",") if x.strip()]
-        base_cfg["nivel_1"] = self.combo_n1.get().strip()
-        base_cfg["nivel_2"] = self.combo_n2.get().strip()
-        base_cfg["nivel_3_columnas"] = [x.strip() for x in self.ent_n3.get().split(",") if x.strip()]
-        base_cfg["nivel_4_columnas"] = [x.strip() for x in self.ent_n4.get().split(",") if x.strip()]
-        base_cfg["separador_nivel_3"] = self.ent_sep.get()
-        base_cfg["formato_dia_nn"] = bool(self.var_formato_dia.get())
-
-        os.makedirs(self.ruta_activa, exist_ok=True)
-        ruta_json = os.path.join(self.ruta_activa, "config_congreso.json")
-        with open(ruta_json, "w", encoding="utf-8") as f:
-            json.dump(base_cfg, f, ensure_ascii=False, indent=2)
-
-        messagebox.showinfo("Configuración guardada", f"Guardado en {ruta_json}")
-        self.recargar_todo()
-
-    def refrescar_panel_red(self):
-        ip = obtener_ip_local()
-        host = socket.gethostname()
-        ruta_bk = obtener_ruta_backup_local()
-        acceso_esc = crear_acceso_directo_escritorio()
-        arch_bk = contar_archivos_en_carpeta(ruta_bk)
-        puesto_bloq = (self.config_data or {}).get("_puesto_bloqueado") or "Ninguno"
-        equipos = (self.config_data or {}).get("equipos", [])
+    def _actualizar_info_red(self):
+        if not hasattr(self, "txt_red"):
+            return
+        ip_local = obtener_ip_local()
+        hostname = socket.gethostname()
+        wg = (self.config or {}).get("workgroup", "N/A")
+        puesto = self._puesto_actual() or "Sin fijar"
+        ruta_ppt = os.path.join(self.ruta_activa, "PPT")
+        acceso_esc = crear_acceso_directo_escritorio() or "No disponible"
+        archivos_bk = contar_archivos_en_carpeta(self.ruta_backup)
 
         lineas = [
-            f"IP Local:            {ip}",
-            f"Nombre Equipo:       {host}",
-            f"Workgroup:           {(self.config_data or {}).get('workgroup', 'N/A')}",
+            f"IP Local:            {ip_local}",
+            f"Nombre Equipo:       {hostname}",
+            f"Workgroup:           {wg}",
+            f"Puesto Activo:       {puesto}",
             f"Carpeta Ejecutable:  {self.ruta_activa}",
-            f"Excel Esperado:      {os.path.join(self.ruta_activa, 'programa.xlsx')}",
-            f"Carpeta PPT:         {os.path.join(self.ruta_activa, 'PPT')}",
-            f"Backup Local Raíz:   {ruta_bk} ({arch_bk} archivos — nunca borra nada)",
-            f"Acceso Escritorio:   {acceso_esc or 'No disponible'}",
-            f"Puesto Fijado Aquí:  {puesto_bloq}",
+            f"Carpeta PPT:         {ruta_ppt}",
+            f"Backup Local Raíz:   {self.ruta_backup} ({archivos_bk} archivos — nunca borra nada)",
+            f"Acceso Escritorio:   {acceso_esc}",
             "",
-            "--- ESTADO DE PUESTOS CONFIGURADOS ---",
+            "--- PUESTOS CONFIGURADOS ---",
         ]
-        for eq in equipos:
+        for eq in (self.config or {}).get("equipos", []):
             rol = "ADMIN (Carga y carpetas)" if str(eq).upper().startswith("ADM") else "SALA (Solo lectura)"
-            estado = "ACTIVO Y BLOQUEADO EN ESTE EQUIPO" if str(eq).upper() == str(puesto_bloq).upper() else "Disponible"
-            lineas.append(f"  * {eq:<16} | {rol:<26} | {estado}")
+            estado = "Bloqueado aquí" if puesto.upper() == str(eq).upper() else "Disponible"
+            lineas.append(f"  * {eq:<24} | {rol:<24} | {estado}")
 
         self.txt_red.delete("1.0", "end")
         self.txt_red.insert("1.0", "\n".join(lineas))
 
+    def _recargar_todo(self):
+        self.config, self.df, self.ruta_activa = cargar_datos_congreso()
+        for w in self.root.winfo_children():
+            w.destroy()
+        self._construir_interfaz()
+        self._cargar_agenda()
+
     def _al_cerrar(self):
-        ruta_bloq = (self.config_data or {}).get("_ruta_puesto_sesion")
-        limpiar_bloqueo_al_salir(ruta_bloq)
-        self.destroy()
+        limpiar_bloqueo_al_salir(self.ruta_bloqueo)
+        self.root.destroy()
 
 
 if __name__ == "__main__":
-    app = CongresoAppEscritorio()
-    app.mainloop()
+    root = tk.Tk()
+    app = CongresoAppEscritorio(root)
+    root.mainloop()

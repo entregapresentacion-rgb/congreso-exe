@@ -33,7 +33,7 @@ ORDEN_COLUMNAS_PRIORITARIAS = [
     ("TÍTULO SESIÓN ES", ["titulo sesion es", "titulo sesion", "titulo de sesion", "sesion"]),
 ]
 
-CARPETA_BACKUP_LOCAL = "BACKUP_LOCAL"
+NOMBRE_BACKUP_LOCAL = "BACKUP_LOCAL"
 
 
 def _cut_bytes(s, n=MAX_NAME_BYTES):
@@ -123,31 +123,41 @@ def obtener_ip_local():
             return "127.0.0.1"
 
 
-def obtener_ruta_backup_local(ruta_activa):
-    ruta_bk = os.path.join(ruta_activa, CARPETA_BACKUP_LOCAL)
+def obtener_ruta_backup_local():
+    """
+    Devuelve C:\\BACKUP_LOCAL en Windows (o ~/BACKUP_LOCAL si no existe C:\\).
+    Crea la carpeta si no existe y nunca borra nada.
+    """
+    if SISTEMA == "Windows" and os.path.exists("C:\\"):
+        raiz_c = "C:\\"
+    else:
+        raiz_c = os.path.expanduser("~")
+    ruta_bk = os.path.join(raiz_c, NOMBRE_BACKUP_LOCAL)
     os.makedirs(ruta_bk, exist_ok=True)
     return ruta_bk
 
 
-def crear_acceso_directo_escritorio(ruta_activa):
+def crear_acceso_directo_escritorio():
     """
-    Crea un acceso directo en el Escritorio apuntando a BACKUP_LOCAL (en la raíz).
+    Crea un acceso directo en el Escritorio apuntando a C:\\BACKUP_LOCAL (o equivalente).
     Nunca borra archivos existentes.
     """
-    ruta_bk = obtener_ruta_backup_local(ruta_activa)
+    ruta_bk = obtener_ruta_backup_local()
     escritorio = os.path.join(os.path.expanduser("~"), "Desktop")
+    if not os.path.exists(escritorio):
+        escritorio = os.path.join(os.path.expanduser("~"), "Escritorio")
     if not os.path.exists(escritorio):
         return None
 
-    nombre_base = "BACKUP_LOCAL_CONGRESO"
+    nombre_base = "BACKUP_LOCAL"
     try:
         if SISTEMA == "Windows":
-            lnk_path = os.path.join(escritorio, f"{nombre_base}.url")
-            if not os.path.exists(lnk_path):
+            url_path = os.path.join(escritorio, f"{nombre_base}.url")
+            if not os.path.exists(url_path):
                 uri = "file:///" + os.path.abspath(ruta_bk).replace("\\", "/")
-                with open(lnk_path, "w", encoding="utf-8") as f:
+                with open(url_path, "w", encoding="utf-8") as f:
                     f.write(f"[InternetShortcut]\nURL={uri}\n")
-            return lnk_path
+            return url_path
         elif SISTEMA == "Darwin":
             webloc_path = os.path.join(escritorio, f"{nombre_base}.webloc")
             if not os.path.exists(webloc_path):
@@ -169,8 +179,8 @@ def crear_acceso_directo_escritorio(ruta_activa):
                     f.write(
                         "[Desktop Entry]\n"
                         "Type=Application\n"
-                        "Name=Backup Local Congreso\n"
-                        f"Exec=xdg-open \"{ruta_bk}\"\n"
+                        "Name=BACKUP_LOCAL\n"
+                        f'Exec=xdg-open "{ruta_bk}"\n'
                         "Icon=folder\n"
                         "Terminal=false\n"
                     )
@@ -179,13 +189,13 @@ def crear_acceso_directo_escritorio(ruta_activa):
         return None
 
 
-def copiar_a_backup_local_sin_borrar(ruta_activa, ruta_rel_carpeta, nombre_archivo, archivo_origen_abs):
+def copiar_a_backup_local_sin_borrar(ruta_rel_carpeta, nombre_archivo, archivo_origen_abs):
     """
-    Copia el archivo subido a BACKUP_LOCAL manteniendo la estructura idéntica de PPT
-    (por ejemplo: BACKUP_LOCAL/PPT/Sala/DIA 15/Sesion/Ponente/archivo.pptx).
-    Nunca borra ni sobrescribe archivos existentes: si ya existe, añade sufijo _v2, _v3...
+    Copia el archivo subido a C:\\BACKUP_LOCAL manteniendo la estructura idéntica de PPT
+    (por ejemplo: C:\\BACKUP_LOCAL\\PPT\\Sala\\DIA 15\\Sesion\\Ponente\\archivo.pptx).
+    Nunca borra ni sobrescribe archivos existentes.
     """
-    ruta_bk_raiz = obtener_ruta_backup_local(ruta_activa)
+    ruta_bk_raiz = obtener_ruta_backup_local()
     rel_limpia = os.path.normpath(ruta_rel_carpeta).lstrip("/\\")
     carpeta_bk_destino = os.path.join(ruta_bk_raiz, rel_limpia)
     os.makedirs(carpeta_bk_destino, exist_ok=True)
@@ -203,10 +213,10 @@ def copiar_a_backup_local_sin_borrar(ruta_activa, ruta_rel_carpeta, nombre_archi
 
 def sincronizar_estructura_backup_local(ruta_activa):
     """
-    Replica la estructura de carpetas de PPT dentro de BACKUP_LOCAL y copia cualquier
-    archivo presente en PPT que no esté aún en BACKUP_LOCAL, sin borrar nada.
+    Replica la estructura de carpetas de PPT dentro de C:\\BACKUP_LOCAL y copia cualquier
+    archivo presente en PPT que no esté aún en el backup, sin borrar nada.
     """
-    ruta_bk_raiz = obtener_ruta_backup_local(ruta_activa)
+    ruta_bk_raiz = obtener_ruta_backup_local()
     ruta_ppt_raiz = os.path.join(ruta_activa, "PPT")
     os.makedirs(ruta_ppt_raiz, exist_ok=True)
     os.makedirs(os.path.join(ruta_bk_raiz, "PPT"), exist_ok=True)
@@ -530,7 +540,7 @@ HTML_RED = """<!DOCTYPE html>
             <div class="col-md-4">
                 <div class="valex-card p-3 h-100">
                     <div class="small text-success fw-bold text-uppercase">Carpeta Backup Local</div>
-                    <div class="small fw-bold mt-1 text-break"><code>{{ info_red.ruta_backup }}</code></div>
+                    <div class="fs-6 fw-bold mt-1 text-break"><code>{{ info_red.ruta_backup }}</code></div>
                     <div class="small text-secondary mt-1">Archivos en backup: {{ info_red.archivos_backup }} (nunca borra nada)</div>
                 </div>
             </div>
@@ -558,7 +568,7 @@ HTML_RED = """<!DOCTYPE html>
                             <th>Puesto / Equipo</th>
                             <th>Rol</th>
                             <th>Estado de Sesión</th>
-                            <th>IP / Host de este equipo</th>
+                            <th>IP Local</th>
                         </tr>
                     </thead>
                     <tbody id="tablaEquiposRed">
@@ -732,7 +742,7 @@ HTML_APP = """<!DOCTYPE html>
         .sesion-bloque.tema-3 { background-color: #2d2336; border: 1px solid rgba(244, 114, 182, 0.35); border-left: 5px solid #f472b6; }
         .sesion-bloque.tema-3 .sesion-header { background: linear-gradient(90deg, rgba(190, 24, 93, 0.32), rgba(244, 114, 182, 0.12)); }
         .sesion-header {
-            padding: 16px 22px;
+            padding: 18px 24px;
             border-bottom: 1px solid rgba(255, 255, 255, 0.08);
             display: flex;
             justify-content: space-between;
@@ -740,22 +750,23 @@ HTML_APP = """<!DOCTYPE html>
             flex-wrap: wrap;
             gap: 14px;
         }
-        /* Zona de cabecera de sesión con texto grande y legible */
+        /* Zona de cabecera de sesión con texto grande */
         .sesion-meta-chip {
             display: inline-flex;
             align-items: center;
-            gap: 7px;
-            background: rgba(15, 23, 42, 0.65);
-            border: 1px solid rgba(255, 255, 255, 0.16);
+            gap: 8px;
+            background: rgba(15, 23, 42, 0.72);
+            border: 1px solid rgba(255, 255, 255, 0.18);
             border-radius: 8px;
-            padding: 6px 13px;
-            font-size: 1rem;
-            line-height: 1.3;
-            color: #f8fafc;
+            padding: 8px 15px;
+            font-size: 1.15rem;
+            line-height: 1.35;
+            color: #ffffff;
         }
         .sesion-ruta-texto {
-            font-size: 0.96rem;
+            font-size: 1.05rem;
             color: #e2e8f0;
+            margin-top: 6px;
         }
         .sesion-body { padding: 14px 20px; display: flex; flex-direction: column; gap: 10px; }
         .ponente-card {
@@ -888,9 +899,9 @@ HTML_APP = """<!DOCTYPE html>
                 </div>
                 <div class="col-sm-6 col-xl-3">
                     <div class="kpi-card kpi-orange">
-                        <div class="kpi-title">Backup Local Activo</div>
+                        <div class="kpi-title">Backup Local en Raíz</div>
                         <div class="kpi-value">{{ archivos_backup }} Arch.</div>
-                        <div class="kpi-sub"><code>BACKUP_LOCAL</code> · Nunca borra nada</div>
+                        <div class="kpi-sub"><code>{{ ruta_backup }}</code></div>
                         <svg class="kpi-wave" viewBox="0 0 200 40" preserveAspectRatio="none"><path d="M0,20 L45,28 L85,14 L130,26 L170,15 L200,24 L200,40 L0,40 Z" fill="#ffffff"/></svg>
                     </div>
                 </div>
@@ -924,14 +935,14 @@ HTML_APP = """<!DOCTYPE html>
                             <option value="cargado">Cargada</option>
                             <option value="pendiente">Pendiente</option>
                         </select>
-                        <button type="button" class="btn btn-sm btn-valex-blue px-3" onclick='abrirRuta("PPT", {{ "true" if es_admin else "false" }})' title="Abrir carpeta raíz PPT">
-                            <i class="bi bi-folder2-open me-1"></i> Carpeta PPT
-                        </button>
                         {% if es_admin %}
                             <button type="button" class="btn btn-sm btn-valex-green px-3" onclick="crearArbolCarpetas()">
                                 <i class="bi bi-folder-plus me-1"></i> Generar Carpetas
                             </button>
                         {% endif %}
+                        <button type="button" class="btn btn-sm btn-valex-blue px-3" onclick='abrirRuta("PPT", {{ "true" if es_admin else "false" }})' title="Abrir carpeta raíz PPT">
+                            <i class="bi bi-folder2-open me-1"></i> Carpeta PPT
+                        </button>
                         <button type="button" class="btn btn-sm btn-outline-light px-3" onclick="limpiarFiltros()">
                             <i class="bi bi-x-circle me-1"></i> Limpiar
                         </button>
@@ -947,10 +958,11 @@ HTML_APP = """<!DOCTYPE html>
 
                             <div class="sesion-header">
                                 <div>
-                                    <div class="d-flex flex-wrap align-items-center gap-2 mb-2">
+                                    <div class="d-flex flex-wrap align-items-center gap-2 mb-1">
                                         {% for meta in sesion.campos_nivel_3 %}
                                             <span class="sesion-meta-chip">
-                                                <strong class="text-info">{{ meta.etiqueta }}:</strong> {{ meta.valor }}
+                                                <strong class="text-info">{{ meta.etiqueta }}:</strong>
+                                                <span>{{ meta.valor }}</span>
                                             </span>
                                         {% endfor %}
                                     </div>
@@ -961,7 +973,7 @@ HTML_APP = """<!DOCTYPE html>
                                 </div>
 
                                 <div class="d-flex align-items-center gap-2">
-                                    <span class="badge bg-dark border border-secondary px-3 py-2" style="font-size: 0.85rem;">
+                                    <span class="badge bg-dark border border-secondary px-3 py-2" style="font-size: 0.95rem;">
                                         <i class="bi bi-people-fill text-info me-1"></i> {{ sesion.ponentes|length }} participante(s)
                                     </span>
                                     <button type="button" class="btn btn-sm btn-outline-light"
@@ -1166,9 +1178,9 @@ filtrarAgenda();
 def _construir_info_red(config, ruta_activa):
     ip_local = obtener_ip_local()
     hostname = socket.gethostname()
-    ruta_bk = obtener_ruta_backup_local(ruta_activa)
+    ruta_bk = obtener_ruta_backup_local()
     ruta_ppt = os.path.join(ruta_activa, "PPT")
-    acceso_esc = crear_acceso_directo_escritorio(ruta_activa)
+    acceso_esc = crear_acceso_directo_escritorio()
     archivos_bk = contar_archivos_en_carpeta(ruta_bk)
     puesto_bloq = (config or {}).get("_puesto_bloqueado") or ""
     equipos = (config or {}).get("equipos", [])
@@ -1231,10 +1243,11 @@ def index():
                 sala_restringida=None,
                 es_admin=False,
                 archivos_backup=0,
+                ruta_backup=obtener_ruta_backup_local(),
             )
 
-        obtener_ruta_backup_local(ruta_activa)
-        crear_acceso_directo_escritorio(ruta_activa)
+        ruta_backup = obtener_ruta_backup_local()
+        crear_acceso_directo_escritorio()
 
         columnas_raw = list(df.columns)
         n3_cols_resueltas = resolver_columnas_nivel_3(config, columnas_raw)
@@ -1326,7 +1339,7 @@ def index():
 
         total_ponentes = sum(len(s["ponentes"]) for s in sesiones_agrupadas)
         con_archivo = sum(1 for s in sesiones_agrupadas for p in s["ponentes"] if p["tiene_ppt"])
-        archivos_backup = contar_archivos_en_carpeta(obtener_ruta_backup_local(ruta_activa))
+        archivos_backup = contar_archivos_en_carpeta(ruta_backup)
 
         return render_template_string(
             HTML_APP,
@@ -1343,6 +1356,7 @@ def index():
             sala_restringida=sala_restringida,
             es_admin=es_admin,
             archivos_backup=archivos_backup,
+            ruta_backup=ruta_backup,
         )
     except Exception:
         return render_template_string(
@@ -1378,8 +1392,8 @@ def api_crear_carpetas():
     if puesto and not puesto.upper().startswith("ADM"):
         return jsonify({"ok": False, "mensaje": "Solo los puestos ADMIN pueden crear o modificar carpetas."})
 
-    obtener_ruta_backup_local(ruta_activa)
-    crear_acceso_directo_escritorio(ruta_activa)
+    ruta_bk = obtener_ruta_backup_local()
+    crear_acceso_directo_escritorio()
 
     columnas_raw = list(df.columns)
     creadas = 0
@@ -1406,7 +1420,7 @@ def api_crear_carpetas():
     copiados_bk = sincronizar_estructura_backup_local(ruta_activa)
     return jsonify({
         "ok": True,
-        "mensaje": f"Carpetas listas ({creadas} nuevas). BACKUP_LOCAL sincronizado ({copiados_bk} archivos copiados, sin borrar nada)."
+        "mensaje": f"Carpetas listas ({creadas} nuevas). {ruta_bk} sincronizado ({copiados_bk} archivos copiados, sin borrar nada)."
     })
 
 
@@ -1453,12 +1467,12 @@ def api_subir_presentacion():
     destino_ppt_abs = os.path.join(carpeta_destino, nombre_seguro)
     archivo.save(destino_ppt_abs)
 
-    copiar_a_backup_local_sin_borrar(ruta_activa, ruta_rel, nombre_seguro, destino_ppt_abs)
-    crear_acceso_directo_escritorio(ruta_activa)
+    ruta_bk_copia = copiar_a_backup_local_sin_borrar(ruta_rel, nombre_seguro, destino_ppt_abs)
+    crear_acceso_directo_escritorio()
 
     return jsonify({
         "ok": True,
-        "mensaje": f"Presentación '{nombre_seguro}' cargada en {ruta_rel} y respaldada en {CARPETA_BACKUP_LOCAL} (sin borrar nada)."
+        "mensaje": f"Presentación '{nombre_seguro}' cargada en {ruta_rel} y copiada a {ruta_bk_copia} (sin borrar nada)."
     })
 
 
@@ -1471,10 +1485,10 @@ def limpiar_bloqueo_al_salir(ruta_archivo_bloqueo):
 
 
 if __name__ == "__main__":
-    cfg, _, r_act = cargar_datos_congreso()
+    cfg, _, _ = cargar_datos_congreso()
     try:
-        obtener_ruta_backup_local(r_act)
-        crear_acceso_directo_escritorio(r_act)
+        obtener_ruta_backup_local()
+        crear_acceso_directo_escritorio()
     except Exception:
         pass
 

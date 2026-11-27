@@ -20,10 +20,10 @@ jobs:
       - name: Instalar dependencias
         run: |
           python -m pip install --upgrade pip
-          pip install pyinstaller pandas openpyxl
+          pip install pyinstaller pywebview pandas openpyxl
 
       - name: Compilar ejecutable macOS (Apple Silicon)
-        run: pyinstaller --onefile --windowed --target-arch arm64 --collect-all pandas --collect-all openpyxl --name Congreso_App Congreso_App.py
+        run: pyinstaller --onedir --windowed --target-arch arm64 --collect-all webview --collect-all pandas --collect-all openpyxl --name Congreso_App Congreso_App.py
 
       - name: Subir artefacto macOS arm64
         uses: actions/upload-artifact@v4
@@ -45,11 +45,11 @@ jobs:
       - name: Instalar PyInstaller y dependencias x86_64
         run: |
           python -m pip install --upgrade pip
-          pip install pyinstaller
-          python -m pip install --target deps_x86_64 --platform macosx_10_15_x86_64 --implementation cp --python-version 3.11 --only-binary=:all: pandas openpyxl
+          pip install pyinstaller pywebview
+          python -m pip install --target deps_x86_64 --platform macosx_10_15_x86_64 --implementation cp --python-version 3.11 --only-binary=:all: pywebview pandas openpyxl
 
       - name: Compilar ejecutable macOS (Intel x86_64)
-        run: PYTHONPATH=deps_x86_64 pyinstaller --onefile --windowed --target-arch x86_64 --paths deps_x86_64 --collect-all pandas --collect-all openpyxl --collect-submodules pandas._libs --collect-submodules pandas._libs.tslibs --hidden-import pandas._libs._cyutility --hidden-import pandas._libs.tslibs.base --name Congreso_App Congreso_App.py
+        run: PYTHONPATH=deps_x86_64 pyinstaller --onedir --windowed --target-arch x86_64 --paths deps_x86_64 --collect-all webview --collect-all pandas --collect-all openpyxl --collect-submodules pandas._libs --collect-submodules pandas._libs.tslibs --hidden-import pandas._libs._cyutility --hidden-import pandas._libs.tslibs.base --name Congreso_App Congreso_App.py
 
       - name: Subir artefacto macOS Intel
         uses: actions/upload-artifact@v4
@@ -71,13 +71,13 @@ jobs:
       - name: Instalar dependencias
         run: |
           python -m pip install --upgrade pip
-          pip install pyinstaller pandas openpyxl
+          pip install pyinstaller pywebview pandas openpyxl
 
       - name: Compilar ejecutable en Windows
-        run: pyinstaller --onefile --windowed --collect-all pandas --collect-all openpyxl --name Congreso_App Congreso_App.py
+        run: pyinstaller --onedir --windowed --collect-all webview --collect-all pandas --collect-all openpyxl --name Congreso_App Congreso_App.py
 
       - name: Subir artefacto Windows
         uses: actions/upload-artifact@v4
         with:
           name: Congreso_App-Windows
-          path: dist/Congreso_App.exe
+          path: dist/Congreso_App*

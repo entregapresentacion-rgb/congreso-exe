@@ -2,13 +2,14 @@ import os
 import re
 import sys
 import json
+import base64
 import shutil
 import socket
+import traceback
 import platform
 import subprocess
 import datetime as dt
-import tkinter as tk
-from tkinter import ttk, filedialog, messagebox
+import webview
 import pandas as pd
 
 SISTEMA = platform.system()
@@ -445,13 +446,1033 @@ def contar_archivos_en_carpeta(ruta_abs):
     return total
 
 
-def abrir_carpeta_en_sistema(ruta_abs):
-    if SISTEMA == "Windows":
-        os.startfile(ruta_abs)
-    elif SISTEMA == "Darwin":
-        subprocess.Popen(["open", ruta_abs])
-    else:
-        subprocess.Popen(["xdg-open", ruta_abs])
+def ordenar_columnas_por_nivel_3(columnas, n3_cols, config=None):
+    base_ordenada = ordenar_columnas_tabla(columnas, config)
+    ordenadas = []
+    usadas = set()
+
+    for c in n3_cols:
+        if c in base_ordenada and c not in usadas:
+            ordenadas.append(c)
+            usadas.add(c)
+
+    for c in base_ordenada:
+        if c not in usadas:
+            ordenadas.append(c)
+            usadas.add(c)
+
+    return ordenadas
+
+
+def _construir_info_red(config, ruta_activa):
+    ip_local = obtener_ip_local()
+    hostname = socket.gethostname()
+    ruta_bk = obtener_ruta_backup_local()
+    ruta_ppt = os.path.join(ruta_activa, "PPT")
+    acceso_esc = crear_acceso_directo_escritorio()
+    archivos_bk = contar_archivos_en_carpeta(ruta_bk)
+    puesto_bloq = (config or {}).get("_puesto_bloqueado") or ""
+    equipos = (config or {}).get("equipos", [])
+
+    equipos_detalle = []
+    for eq in equipos:
+        es_adm = str(eq).upper().startswith("ADM")
+        equipos_detalle.append({
+            "nombre": eq,
+            "es_admin": es_adm,
+            "bloqueado_aqui": bool(puesto_bloq and str(puesto_bloq).upper() == str(eq).upper()),
+        })
+
+    return {
+        "ok": True,
+        "ip_local": ip_local,
+        "hostname": hostname,
+        "workgroup": (config or {}).get("workgroup", "N/A"),
+        "puesto_bloqueado": puesto_bloq,
+        "ruta_ppt": ruta_ppt,
+        "ruta_backup": ruta_bk,
+        "acceso_escritorio": acceso_esc,
+        "archivos_backup": archivos_bk,
+        "equipos_detalle": equipos_detalle,
+    }
+
+
+def _render_simple(template_str, **ctx):
+    out = template_str
+    for k, v in ctx.items():
+        token = "{{ " + k + " }}"
+        if token in out:
+            out = out.replace(token, "" if v is None else str(v))
+    return out
+
+
+HTML_ERROR = """<!DOCTYPE html>
+<html lang="es">
+<head><meta charset="UTF-8"><title>Error en Congreso_App</title></head>
+<body style="background:#111726;color:#fff;font-family:sans-serif;padding:30px;">
+  <h2 style="color:#f87171;">Se produjo un error al cargar Congreso_App</h2>
+  <p>Ruta activa detectada: <code>{{ ruta_activa }}</code></p>
+  <pre style="background:#1e293b;padding:16px;border-radius:8px;overflow:auto;color:#fca5a5;">{{ detalle_error }}</pre>
+</body>
+</html>"""
+
+HTML_RED = """<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CongresoApp | Red, Equipos y Backup</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css" rel="stylesheet">
+    <style>
+        body { background-color: #111726; color: #fff; font-family: 'Roboto', sans-serif; padding-bottom: 40px; }
+        .valex-topbar { background-color: #1f2940; border-bottom: 1px solid rgba(255,255,255,0.08); padding: 12px 24px; }
+        .valex-card { background-color: #1f2940; border: 1px solid rgba(255,255,255,0.08); border-radius: 8px; }
+        .valex-card-header { padding: 16px 22px; border-bottom: 1px solid rgba(255,255,255,0.08); }
+        .table-dark-custom { --bs-table-bg: #151d30; --bs-table-color: #e2e8f0; --bs-table-border-color: rgba(255,255,255,0.08); }
+    </style>
+</head>
+<body>
+    <header class="valex-topbar d-flex justify-content-between align-items-center mb-4">
+        <div class="d-flex align-items-center gap-3">
+            <button type="button" class="btn btn-sm btn-outline-info" onclick="volverAgenda()"><i class="bi bi-arrow-left me-1"></i> Volver a Agenda</button>
+            <h5 class="m-0 fw-bold">Panel de Red, Equipos y Backup Local</h5>
+        </div>
+        <span class="badge bg-dark border border-secondary px-3 py-2" id="badgeIpTop">
+            <i class="bi bi-pc-display text-info me-1"></i> Cargando red...
+        </span>
+    </header>
+
+    <div class="container-fluid px-4" style="max-width: 1320px;">
+        <div class="row g-3 mb-4">
+            <div class="col-md-4">
+                <div class="valex-card p-3 h-100">
+                    <div class="small text-info fw-bold text-uppercase">Red Local</div>
+                    <div class="fs-5 fw-bold mt-1" id="redIp">-</div>
+                    <div class="small text-secondary mt-1" id="redMeta">-</div>
+                </div>
+            </div>
+            <div class="col-md-4">
+                <div class="valex-card p-3 h-100">
+                    <div class="small text-success fw-bold text-uppercase">Carpeta Backup Local</div>
+                    <div class="fs-6 fw-bold mt-1 text-break"><code id="redBackup">-</code></div>
+                    <div class="small text-secondary mt-1" id="redBackupCount">-</div>
+                </div>
+            </div>
+            <div class="col-md-4">
+                <div class="valex-card p-3 h-100">
+                    <div class="small text-warning fw-bold text-uppercase">Acceso Directo Escritorio</div>
+                    <div class="small fw-bold mt-1 text-break"><code id="redEscritorio">-</code></div>
+                    <div class="small text-secondary mt-1" id="redPpt">-</div>
+                </div>
+            </div>
+        </div>
+
+        <div class="valex-card">
+            <div class="valex-card-header d-flex justify-content-between align-items-center">
+                <div>
+                    <h6 class="m-0 fw-bold text-uppercase">Estado de Puestos y Equipos Configurados</h6>
+                    <small class="text-secondary">Actualización automática cada 5 segundos</small>
+                </div>
+                <button class="btn btn-sm btn-outline-info" onclick="cargarEstadoRed()"><i class="bi bi-arrow-clockwise me-1"></i> Actualizar</button>
+            </div>
+            <div class="p-3">
+                <table class="table table-dark table-hover table-dark-custom align-middle mb-0">
+                    <thead>
+                        <tr>
+                            <th>Puesto / Equipo</th>
+                            <th>Rol</th>
+                            <th>Estado de Sesión</th>
+                            <th>IP Local</th>
+                        </tr>
+                    </thead>
+                    <tbody id="tablaEquiposRed"></tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+<script>
+function volverAgenda() {
+    window.pywebview.api.ir_a_agenda();
+}
+
+function cargarEstadoRed() {
+    window.pywebview.api.obtener_estado_red().then(d => {
+        if (!d || !d.ok) return;
+        document.getElementById('badgeIpTop').innerHTML = `<i class="bi bi-pc-display text-info me-1"></i> IP Local: ${d.ip_local} (${d.hostname})`;
+        document.getElementById('redIp').textContent = `${d.ip_local} (${d.hostname})`;
+        document.getElementById('redMeta').textContent = `Grupo: ${d.workgroup}`;
+        document.getElementById('redBackup').textContent = d.ruta_backup;
+        document.getElementById('redBackupCount').textContent = `Archivos en backup: ${d.archivos_backup} (nunca borra nada)`;
+        document.getElementById('redEscritorio').textContent = d.acceso_escritorio || 'No disponible';
+        document.getElementById('redPpt').textContent = `Carpeta PPT: ${d.ruta_ppt}`;
+
+        const tbody = document.getElementById('tablaEquiposRed');
+        tbody.innerHTML = d.equipos_detalle.map(eq => `
+            <tr>
+                <td class="fw-bold">${eq.nombre}</td>
+                <td>${eq.es_admin
+                    ? '<span class="badge bg-primary">ADMIN (Carga y gestión)</span>'
+                    : '<span class="badge bg-secondary">SALA (Solo lectura)</span>'}</td>
+                <td>${eq.bloqueado_aqui
+                    ? '<span class="badge bg-success"><i class="bi bi-lock-fill me-1"></i> Fijado y activo en este equipo</span>'
+                    : '<span class="badge bg-dark border border-secondary text-secondary">Disponible</span>'}</td>
+                <td><code>${d.ip_local}</code></td>
+            </tr>
+        `).join('');
+    });
+}
+
+window.addEventListener('pywebviewready', () => {
+    cargarEstadoRed();
+    setInterval(cargarEstadoRed, 5000);
+});
+</script>
+</body>
+</html>"""
+
+HTML_APP = """<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CongresoApp | Agenda por Sesiones</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@300;400;500;700&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg-body: #111726;
+            --bg-card: #1f2940;
+            --bg-input: #151d30;
+            --border-color: rgba(255, 255, 255, 0.08);
+            --text-main: #ffffff;
+            --text-muted: #94a3b8;
+        }
+        body {
+            background-color: var(--bg-body);
+            color: var(--text-main);
+            font-family: 'Roboto', -apple-system, BlinkMacSystemFont, sans-serif;
+            margin: 0;
+            padding-bottom: 50px;
+        }
+        .valex-topbar {
+            background-color: var(--bg-card);
+            border-bottom: 1px solid var(--border-color);
+            padding: 12px 24px;
+        }
+        .brand-logo {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            font-weight: 700;
+            font-size: 1.25rem;
+            color: #fff;
+            text-decoration: none;
+            cursor: pointer;
+        }
+        .brand-icon {
+            width: 32px;
+            height: 32px;
+            border-radius: 8px;
+            background: linear-gradient(135deg, #0162e8, #00b9ff);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .valex-search {
+            background-color: var(--bg-input);
+            border: 1px solid rgba(56, 189, 248, 0.25);
+            border-radius: 20px;
+            padding: 7px 16px;
+            color: #fff;
+            font-size: 0.88rem;
+            width: 360px;
+            max-width: 100%;
+        }
+        .valex-search:focus { outline: none; border-color: #00b9ff; box-shadow: 0 0 0 2px rgba(0, 185, 255, 0.18); }
+        .kpi-card {
+            border-radius: 8px;
+            padding: 18px 20px 36px 20px;
+            position: relative;
+            overflow: hidden;
+            color: #fff;
+            box-shadow: 0 4px 15px rgba(0, 0, 0, 0.25);
+            height: 100%;
+        }
+        .kpi-blue { background: linear-gradient(to right, #0162e8 0%, #00b9ff 100%); }
+        .kpi-pink { background: linear-gradient(to right, #f93a5a 0%, #f7778c 100%); }
+        .kpi-green { background: linear-gradient(to right, #029666 0%, #48d6a8 100%); }
+        .kpi-orange { background: linear-gradient(to right, #f76a2d 0%, #efa65f 100%); }
+        .kpi-title { font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.8px; font-weight: 700; opacity: 0.9; margin-bottom: 6px; }
+        .kpi-value { font-size: 1.55rem; font-weight: 700; line-height: 1.2; }
+        .kpi-sub { font-size: 0.78rem; opacity: 0.85; margin-top: 4px; }
+        .kpi-wave { position: absolute; bottom: 0; left: 0; width: 100%; height: 32px; opacity: 0.35; }
+        .valex-card {
+            background-color: var(--bg-card);
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.2);
+        }
+        .valex-card-header {
+            padding: 16px 22px;
+            border-bottom: 1px solid var(--border-color);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 10px;
+        }
+        .valex-card-title { font-size: 0.95rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; margin: 0; }
+        .valex-card-subtitle { font-size: 0.8rem; color: var(--text-muted); margin-top: 2px; }
+        .form-select, .form-control {
+            background-color: var(--bg-input) !important;
+            border: 1px solid rgba(255, 255, 255, 0.14) !important;
+            color: #fff !important;
+            font-size: 0.84rem;
+        }
+        .btn-valex-blue { background: linear-gradient(to right, #0162e8, #00b9ff); border: none; color: #fff; font-weight: 600; }
+        .btn-valex-green { background: linear-gradient(to right, #029666, #48d6a8); border: none; color: #fff; font-weight: 600; }
+        .btn-valex-purple { background: linear-gradient(to right, #6d28d9, #a855f7); border: none; color: #fff; font-weight: 600; }
+        .btn-valex-blue:hover, .btn-valex-green:hover, .btn-valex-purple:hover { color: #fff; opacity: 0.92; }
+        .sesion-bloque {
+            border-radius: 10px;
+            margin-bottom: 18px;
+            overflow: hidden;
+            box-shadow: 0 6px 18px rgba(0, 0, 0, 0.28);
+        }
+        .sesion-bloque.tema-0 { background-color: #192642; border: 1px solid rgba(56, 189, 248, 0.35); border-left: 5px solid #00b9ff; }
+        .sesion-bloque.tema-0 .sesion-header { background: linear-gradient(90deg, rgba(1, 98, 232, 0.34), rgba(0, 185, 255, 0.12)); }
+        .sesion-bloque.tema-1 { background-color: #211e3d; border: 1px solid rgba(168, 85, 247, 0.35); border-left: 5px solid #a855f7; }
+        .sesion-bloque.tema-1 .sesion-header { background: linear-gradient(90deg, rgba(126, 34, 206, 0.34), rgba(168, 85, 247, 0.12)); }
+        .sesion-bloque.tema-2 { background-color: #162e36; border: 1px solid rgba(45, 212, 191, 0.35); border-left: 5px solid #2dd4bf; }
+        .sesion-bloque.tema-2 .sesion-header { background: linear-gradient(90deg, rgba(13, 148, 136, 0.34), rgba(45, 212, 191, 0.12)); }
+        .sesion-bloque.tema-3 { background-color: #2d2336; border: 1px solid rgba(244, 114, 182, 0.35); border-left: 5px solid #f472b6; }
+        .sesion-bloque.tema-3 .sesion-header { background: linear-gradient(90deg, rgba(190, 24, 93, 0.32), rgba(244, 114, 182, 0.12)); }
+        .sesion-header {
+            padding: 18px 24px;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 14px;
+        }
+        .sesion-meta-chip {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            background: rgba(15, 23, 42, 0.72);
+            border: 1px solid rgba(255, 255, 255, 0.18);
+            border-radius: 8px;
+            padding: 8px 15px;
+            font-size: 1.15rem;
+            line-height: 1.35;
+            color: #ffffff;
+        }
+        .sesion-ruta-texto {
+            font-size: 1.05rem;
+            color: #e2e8f0;
+            margin-top: 6px;
+        }
+        .sesion-body { padding: 14px 20px; display: flex; flex-direction: column; gap: 10px; }
+        .ponente-card {
+            background-color: rgba(15, 23, 42, 0.52);
+            border: 1px solid rgba(255, 255, 255, 0.09);
+            border-radius: 8px;
+            padding: 11px 16px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 12px;
+        }
+        .ponente-card:hover { background-color: rgba(15, 23, 42, 0.78); border-color: rgba(56, 189, 248, 0.35); }
+        .cartel-estado {
+            font-size: 0.78rem;
+            font-weight: 700;
+            letter-spacing: 0.5px;
+            text-transform: uppercase;
+            padding: 5px 12px;
+            border-radius: 6px;
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+        }
+        .cartel-cargada { background-color: rgba(16, 185, 129, 0.22); color: #6ee7b7; border: 1px solid rgba(52, 211, 153, 0.5); }
+        .cartel-pendiente { background-color: rgba(245, 158, 11, 0.22); color: #fcd34d; border: 1px solid rgba(251, 191, 36, 0.5); }
+    </style>
+</head>
+<body>
+
+    <header class="valex-topbar d-flex flex-wrap justify-content-between align-items-center gap-3">
+        <div class="d-flex align-items-center gap-3">
+            <a class="brand-logo" onclick="recargarDatos()">
+                <div class="brand-icon"><i class="bi bi-easel2-fill"></i></div>
+                <span>Congreso<span style="color:#00b9ff;">App</span></span>
+            </a>
+            <div class="d-flex align-items-center gap-2">
+                <input type="text" id="buscadorGlobal" class="valex-search" placeholder="Filtrar por ponente, sesión, sala o día..." onkeyup="filtrarAgenda()" oninput="filtrarAgenda()">
+                <button type="button" class="btn btn-sm btn-outline-info px-2 py-1" onclick="limpiarFiltros()" title="Limpiar filtro">
+                    <i class="bi bi-x-lg"></i>
+                </button>
+            </div>
+        </div>
+        <div class="d-flex align-items-center gap-2 flex-wrap">
+            <button type="button" class="btn btn-sm btn-valex-purple px-3" onclick="irARed()">
+                <i class="bi bi-hdd-network me-1"></i> Red y Equipos
+            </button>
+            <span class="badge bg-dark border border-secondary px-3 py-2" id="badgeWorkgroup">
+                <i class="bi bi-hdd-network text-info me-1"></i> N/A
+            </span>
+            <span class="badge bg-dark border border-secondary px-3 py-2" id="badgePuestoTop">
+                <i class="bi bi-shield-lock text-warning me-1"></i> Sin puesto fijado
+            </span>
+        </div>
+    </header>
+
+    <div class="container-fluid px-4 pt-4" style="max-width: 1440px;">
+
+        <div id="sinConfigBox" class="valex-card p-5 text-center my-5 d-none">
+            <i class="bi bi-exclamation-diamond text-warning display-4 mb-3"></i>
+            <h4 class="fw-bold">No se encontraron los archivos de configuración</h4>
+            <p style="color: var(--text-muted); max-width: 560px; margin: 10px auto 20px;">
+                Coloca <code>programa.xlsx</code> y <code>config_congreso.json</code> en la misma carpeta que <strong>Congreso_App</strong>.
+            </p>
+            <button type="button" class="btn btn-valex-blue px-4" onclick="recargarDatos()">Reintentar</button>
+        </div>
+
+        <div id="contenidoApp" class="d-none">
+            <div class="valex-card mb-4">
+                <div class="valex-card-header">
+                    <div>
+                        <h5 class="valex-card-title">Puesto de Trabajo en el Congreso</h5>
+                        <div class="valex-card-subtitle" id="subtituloPuesto">
+                            Selecciona <strong>ADM1/ADM2</strong> (puede cargar presentaciones) o una <strong>SALA</strong> (solo lectura y queda bloqueada).
+                        </div>
+                    </div>
+                    <div class="d-flex align-items-center gap-2" id="controlesPuesto">
+                        <select id="selectPuesto" class="form-select form-select-sm" style="width: 260px;"></select>
+                        <button type="button" id="btnConfirmarPuesto" class="btn btn-sm btn-valex-green px-3" onclick="fijarPuesto()">Confirmar y Bloquear</button>
+                    </div>
+                </div>
+            </div>
+
+            <div class="row g-3 mb-4">
+                <div class="col-sm-6 col-xl-3">
+                    <div class="kpi-card kpi-blue">
+                        <div class="kpi-title">Sesiones Visibles</div>
+                        <div class="kpi-value" id="kpiSesiones">0</div>
+                        <div class="kpi-sub" id="kpiSesionesTotal">Total sesiones: 0</div>
+                        <svg class="kpi-wave" viewBox="0 0 200 40" preserveAspectRatio="none"><path d="M0,30 L30,22 L60,28 L95,12 L130,24 L165,10 L200,18 L200,40 L0,40 Z" fill="#ffffff"/></svg>
+                    </div>
+                </div>
+                <div class="col-sm-6 col-xl-3">
+                    <div class="kpi-card kpi-pink">
+                        <div class="kpi-title">Ponentes Visibles</div>
+                        <div class="kpi-value" id="kpiPonentes">0</div>
+                        <div class="kpi-sub" id="kpiPonentesTotal">Total en programa: 0</div>
+                        <svg class="kpi-wave" viewBox="0 0 200 40" preserveAspectRatio="none"><path d="M0,25 L40,32 L80,15 L120,25 L160,12 L200,22 L200,40 L0,40 Z" fill="#ffffff"/></svg>
+                    </div>
+                </div>
+                <div class="col-sm-6 col-xl-3">
+                    <div class="kpi-card kpi-green">
+                        <div class="kpi-title">Presentaciones Cargadas</div>
+                        <div class="kpi-value" id="kpiCargadas">0 / 0</div>
+                        <div class="kpi-sub">Por ponente en cada sesión</div>
+                        <svg class="kpi-wave" viewBox="0 0 200 40" preserveAspectRatio="none"><path d="M0,32 L35,18 L75,26 L115,10 L155,20 L200,8 L200,40 L0,40 Z" fill="#ffffff"/></svg>
+                    </div>
+                </div>
+                <div class="col-sm-6 col-xl-3">
+                    <div class="kpi-card kpi-orange">
+                        <div class="kpi-title">Backup Local en Raíz</div>
+                        <div class="kpi-value" id="kpiBackupArch">0 Arch.</div>
+                        <div class="kpi-sub"><code id="kpiBackupRuta">-</code></div>
+                        <svg class="kpi-wave" viewBox="0 0 200 40" preserveAspectRatio="none"><path d="M0,20 L45,28 L85,14 L130,26 L170,15 L200,24 L200,40 L0,40 Z" fill="#ffffff"/></svg>
+                    </div>
+                </div>
+            </div>
+
+            <div id="alertaAccion" class="alert d-none mb-4"></div>
+
+            <div class="valex-card mb-4">
+                <div class="valex-card-header">
+                    <div>
+                        <h5 class="valex-card-title">Agenda Englobada por Sesiones</h5>
+                        <div class="valex-card-subtitle">
+                            Cada sesión agrupa su carpeta de ponencia y subcarpetas individuales por participante
+                        </div>
+                    </div>
+                    <div class="d-flex flex-wrap align-items-center gap-2">
+                        <select id="flt_dia" class="form-select form-select-sm" style="width: 150px;" onchange="filtrarAgenda()">
+                            <option value="">Todos los días</option>
+                        </select>
+                        <select id="flt_sala" class="form-select form-select-sm" style="width: 210px;" onchange="filtrarAgenda()">
+                            <option value="">Todas las salas</option>
+                        </select>
+                        <select id="flt_estado" class="form-select form-select-sm" style="width: 150px;" onchange="filtrarAgenda()">
+                            <option value="">Estado: Todos</option>
+                            <option value="cargado">Cargada</option>
+                            <option value="pendiente">Pendiente</option>
+                        </select>
+                        <button type="button" id="btnGenerarCarpetas" class="btn btn-sm btn-valex-green px-3" onclick="crearArbolCarpetas()">
+                            <i class="bi bi-folder-plus me-1"></i> Generar Carpetas
+                        </button>
+                        <button type="button" id="btnCarpetaPpt" class="btn btn-sm btn-valex-blue px-3" onclick="abrirRutaPpt()" title="Abrir carpeta raíz PPT">
+                            <i class="bi bi-folder2-open me-1"></i> Carpeta PPT
+                        </button>
+                        <button type="button" class="btn btn-sm btn-outline-light px-3" onclick="limpiarFiltros()">
+                            <i class="bi bi-x-circle me-1"></i> Limpiar
+                        </button>
+                    </div>
+                </div>
+
+                <div class="p-3" id="contenedorSesiones"></div>
+            </div>
+        </div>
+    </div>
+
+<script>
+let ESTADO_APP = null;
+let SALA_BLOQUEADA = null;
+let ES_ADMIN = true;
+
+function escHtml(s) {
+    return String(s ?? '').replace(/[&<>"']/g, m => ({
+        '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+    }[m]));
+}
+
+function mostrarAlerta(texto, ok = true) {
+    const el = document.getElementById('alertaAccion');
+    el.className = 'alert mb-4';
+    el.style.background = ok ? 'rgba(2,150,102,0.2)' : 'rgba(249,58,90,0.2)';
+    el.style.border = ok ? '1px solid #48d6a8' : '1px solid #f7778c';
+    el.style.color = ok ? '#6ee7b7' : '#fda4af';
+    el.innerHTML = `<i class="bi ${ok ? 'bi-check-circle-fill' : 'bi-exclamation-triangle-fill'} me-2"></i>${escHtml(texto)}`;
+}
+
+function irARed() {
+    window.pywebview.api.ir_a_red();
+}
+
+function recargarDatos() {
+    window.pywebview.api.obtener_datos_agenda().then(renderizarAgenda);
+}
+
+function fijarPuesto() {
+    const puesto = document.getElementById('selectPuesto').value;
+    if (!puesto) return;
+    window.pywebview.api.fijar_puesto(puesto).then(data => {
+        mostrarAlerta(data.mensaje, data.ok);
+        if (data.ok) setTimeout(recargarDatos, 500);
+    });
+}
+
+function crearArbolCarpetas() {
+    window.pywebview.api.crear_carpetas().then(data => {
+        mostrarAlerta(data.mensaje, data.ok);
+        if (data.ok) setTimeout(recargarDatos, 700);
+    });
+}
+
+function abrirRuta(rutaRelativa, crearSiNoExiste = true) {
+    window.pywebview.api.abrir_ruta(rutaRelativa, crearSiNoExiste).then(data => {
+        if (data && !data.ok) mostrarAlerta(data.mensaje, false);
+    });
+}
+
+function abrirRutaPpt() {
+    abrirRuta('PPT', ES_ADMIN);
+}
+
+function subirPresentacion(input, rutaRelativa) {
+    if (!input.files || !input.files[0]) return;
+    const archivo = input.files[0];
+    const reader = new FileReader();
+    reader.onload = function () {
+        const base64Data = String(reader.result || '').split(',')[1] || '';
+        window.pywebview.api.subir_presentacion_b64(archivo.name, rutaRelativa, base64Data).then(data => {
+            mostrarAlerta(data.mensaje, data.ok);
+            input.value = '';
+            if (data.ok) setTimeout(recargarDatos, 700);
+        });
+    };
+    reader.readAsDataURL(archivo);
+}
+
+function renderizarAgenda(d) {
+    ESTADO_APP = d;
+    if (!d || !d.ok || !d.config_cargada) {
+        document.getElementById('sinConfigBox').classList.remove('d-none');
+        document.getElementById('contenidoApp').classList.add('d-none');
+        return;
+    }
+
+    document.getElementById('sinConfigBox').classList.add('d-none');
+    document.getElementById('contenidoApp').classList.remove('d-none');
+
+    SALA_BLOQUEADA = d.sala_restringida || null;
+    ES_ADMIN = !!d.es_admin;
+
+    document.getElementById('badgeWorkgroup').innerHTML = `<i class="bi bi-hdd-network text-info me-1"></i> ${escHtml(d.workgroup || 'N/A')}`;
+    const rolTxt = d.puesto_activo
+        ? `${escHtml(d.puesto_activo)} (${ES_ADMIN ? 'ADMIN' : 'SALA - SOLO LECTURA'})`
+        : 'Sin puesto fijado';
+    document.getElementById('badgePuestoTop').innerHTML = `<i class="bi bi-shield-lock text-warning me-1"></i> ${rolTxt}`;
+
+    const subPuesto = document.getElementById('subtituloPuesto');
+    const selPuesto = document.getElementById('selectPuesto');
+    const btnConfirmar = document.getElementById('btnConfirmarPuesto');
+    const controlesPuesto = document.getElementById('controlesPuesto');
+
+    if (d.puesto_bloqueado) {
+        subPuesto.innerHTML = `Puesto fijado y bloqueado en <strong>${escHtml(d.puesto_bloqueado)}</strong>. Para cambiarlo, vuelve a abrir el programa.`;
+        selPuesto.innerHTML = `<option value="${escHtml(d.puesto_bloqueado)}" selected>${escHtml(d.puesto_bloqueado)}</option>`;
+        selPuesto.disabled = true;
+        if (btnConfirmar) btnConfirmar.remove();
+        if (!document.getElementById('badgeBloqueado')) {
+            const sp = document.createElement('span');
+            sp.id = 'badgeBloqueado';
+            sp.className = 'badge bg-secondary px-3 py-2';
+            sp.innerHTML = '<i class="bi bi-lock-fill me-1"></i> Bloqueado';
+            controlesPuesto.appendChild(sp);
+        }
+    } else {
+        subPuesto.innerHTML = 'Selecciona <strong>ADM1/ADM2</strong> (puede cargar presentaciones) o una <strong>SALA</strong> (solo lectura y queda bloqueada).';
+        selPuesto.disabled = false;
+        selPuesto.innerHTML = '<option value="">-- Seleccionar puesto --</option>' +
+            (d.equipos || []).map(eq => {
+                const esAdm = String(eq).toUpperCase().startsWith('ADM');
+                const sel = eq === d.puesto_activo ? 'selected' : '';
+                return `<option value="${escHtml(eq)}" ${sel}>${escHtml(eq)} ${esAdm ? '(ADMIN - Carga)' : '(SALA - Solo ver)'}</option>`;
+            }).join('');
+    }
+
+    document.getElementById('kpiSesionesTotal').textContent = `Total sesiones: ${d.sesiones_agrupadas.length}`;
+    document.getElementById('kpiPonentesTotal').textContent = `Total en programa: ${d.total_ponentes}`;
+    document.getElementById('kpiCargadas').textContent = `${d.con_archivo} / ${d.total_ponentes}`;
+    document.getElementById('kpiBackupArch').textContent = `${d.archivos_backup} Arch.`;
+    document.getElementById('kpiBackupRuta').textContent = d.ruta_backup;
+
+    document.getElementById('btnGenerarCarpetas').classList.toggle('d-none', !ES_ADMIN);
+
+    const fltDia = document.getElementById('flt_dia');
+    const diaPrev = fltDia.value;
+    fltDia.innerHTML = '<option value="">Todos los días</option>' +
+        (d.dias_unicos || []).map(x => `<option value="${escHtml(String(x).toLowerCase())}">${escHtml(x)}</option>`).join('');
+    if (diaPrev) fltDia.value = diaPrev;
+
+    const fltSala = document.getElementById('flt_sala');
+    fltSala.innerHTML = '<option value="">Todas las salas</option>' +
+        (d.salas_unicas || []).map(s => {
+            const selected = SALA_BLOQUEADA && String(s).toLowerCase() === String(SALA_BLOQUEADA).toLowerCase() ? 'selected' : '';
+            return `<option value="${escHtml(String(s).toLowerCase())}" ${selected}>${escHtml(s)}</option>`;
+        }).join('');
+    fltSala.disabled = !!SALA_BLOQUEADA;
+
+    const cont = document.getElementById('contenedorSesiones');
+    cont.innerHTML = d.sesiones_agrupadas.map((sesion, idx) => {
+        const tema = idx % 4;
+        const chipsHtml = (sesion.campos_nivel_3 || []).map(m =>
+            `<span class="sesion-meta-chip"><strong class="text-info">${escHtml(m.etiqueta)}:</strong> <span>${escHtml(m.valor)}</span></span>`
+        ).join('');
+
+        const ponentesHtml = (sesion.ponentes || []).map(p => {
+            const estadoHtml = p.tiene_ppt
+                ? `<span class="cartel-estado cartel-cargada"><i class="bi bi-check-circle-fill"></i> CARGADA (${p.num_archivos})</span>`
+                : `<span class="cartel-estado cartel-pendiente"><i class="bi bi-hourglass-split"></i> PENDIENTE</span>`;
+
+            const subirHtml = ES_ADMIN
+                ? `<label class="btn btn-sm btn-valex-green mb-0 px-3" title="Subir presentación a la subcarpeta de ${escHtml(p.ponente)}">
+                       <i class="bi bi-upload me-1"></i> Subir
+                       <input type="file" class="d-none" onchange='subirPresentacion(this, ${JSON.stringify(p.ruta_carpeta)})'>
+                   </label>`
+                : '';
+
+            return `
+                <div class="ponente-card"
+                     data-estado="${p.tiene_ppt ? 'cargado' : 'pendiente'}"
+                     data-ponente-texto="${escHtml(String(p.texto_busqueda || '').toLowerCase())}">
+                    <div class="d-flex align-items-center gap-3">
+                        <div style="width: 36px; height: 36px; border-radius: 50%; background: rgba(56, 189, 248, 0.16); border: 1px solid rgba(56, 189, 248, 0.35); display: flex; align-items: center; justify-content: center;">
+                            <i class="bi bi-person-fill text-info"></i>
+                        </div>
+                        <div>
+                            <div class="fw-bold text-white" style="font-size: 0.98rem;">${escHtml(p.ponente)}</div>
+                            ${p.detalle_extra ? `<div class="small" style="color: var(--text-muted);">${escHtml(p.detalle_extra)}</div>` : ''}
+                            <div class="small text-secondary"><code>${escHtml(p.ruta_carpeta)}</code></div>
+                        </div>
+                    </div>
+                    <div class="d-flex align-items-center flex-wrap gap-2">
+                        ${estadoHtml}
+                        <button type="button" class="btn btn-sm btn-valex-blue px-3"
+                                onclick='abrirRuta(${JSON.stringify(p.ruta_carpeta)}, ${ES_ADMIN ? 'true' : 'false'})'>
+                            <i class="bi bi-folder2-open me-1"></i> Subcarpeta
+                        </button>
+                        ${subirHtml}
+                    </div>
+                </div>
+            `;
+        }).join('');
+
+        return `
+            <div class="sesion-bloque tema-${tema}"
+                 data-sala="${escHtml(String(sesion.sala || '').toLowerCase())}"
+                 data-dia="${escHtml(String(sesion.dia || '').toLowerCase())}"
+                 data-sesion-texto="${escHtml(String(sesion.texto_busqueda || '').toLowerCase())}">
+                <div class="sesion-header">
+                    <div>
+                        <div class="d-flex flex-wrap align-items-center gap-2 mb-1">${chipsHtml}</div>
+                        <div class="sesion-ruta-texto">
+                            <i class="bi bi-folder2 text-warning me-1"></i>
+                            <code>${escHtml(sesion.ruta_sesion)}</code>
+                        </div>
+                    </div>
+                    <div class="d-flex align-items-center gap-2">
+                        <span class="badge bg-dark border border-secondary px-3 py-2" style="font-size: 0.95rem;">
+                            <i class="bi bi-people-fill text-info me-1"></i> ${(sesion.ponentes || []).length} participante(s)
+                        </span>
+                        <button type="button" class="btn btn-sm btn-outline-light"
+                                onclick='abrirRuta(${JSON.stringify(sesion.ruta_sesion)}, ${ES_ADMIN ? 'true' : 'false'})'
+                                title="Abrir carpeta de la ponencia">
+                            <i class="bi bi-folder-symlink me-1"></i> Carpeta Ponencia
+                        </button>
+                    </div>
+                </div>
+                <div class="sesion-body">${ponentesHtml}</div>
+            </div>
+        `;
+    }).join('');
+
+    filtrarAgenda();
+}
+
+function filtrarAgenda() {
+    const q = document.getElementById('buscadorGlobal').value.toLowerCase().trim();
+    const fltDia = document.getElementById('flt_dia').value.toLowerCase().trim();
+    const fltSala = document.getElementById('flt_sala').value.toLowerCase().trim();
+    const fltEstado = document.getElementById('flt_estado').value.toLowerCase().trim();
+
+    let sesionesVisibles = 0;
+    let ponentesVisibles = 0;
+
+    document.querySelectorAll('.sesion-bloque').forEach(bloque => {
+        const salaBloque = bloque.getAttribute('data-sala') || '';
+        const diaBloque = bloque.getAttribute('data-dia') || '';
+        const textoSesion = bloque.getAttribute('data-sesion-texto') || '';
+
+        if (SALA_BLOQUEADA && salaBloque !== SALA_BLOQUEADA.toLowerCase()) {
+            bloque.style.display = 'none';
+            return;
+        }
+        if (fltSala && salaBloque !== fltSala) {
+            bloque.style.display = 'none';
+            return;
+        }
+        if (fltDia && diaBloque !== fltDia) {
+            bloque.style.display = 'none';
+            return;
+        }
+
+        const coincideSesion = !q || textoSesion.includes(q);
+        let ponentesEnBloque = 0;
+
+        bloque.querySelectorAll('.ponente-card').forEach(card => {
+            const estadoCard = card.getAttribute('data-estado') || '';
+            const textoPonente = card.getAttribute('data-ponente-texto') || '';
+
+            const okEstado = !fltEstado || estadoCard === fltEstado;
+            const okTexto = coincideSesion || !q || textoPonente.includes(q);
+
+            if (okEstado && okTexto) {
+                card.style.display = '';
+                ponentesEnBloque++;
+                ponentesVisibles++;
+            } else {
+                card.style.display = 'none';
+            }
+        });
+
+        if (ponentesEnBloque > 0) {
+            bloque.style.display = '';
+            sesionesVisibles++;
+        } else {
+            bloque.style.display = 'none';
+        }
+    });
+
+    const kpiS = document.getElementById('kpiSesiones');
+    const kpiP = document.getElementById('kpiPonentes');
+    if (kpiS) kpiS.textContent = sesionesVisibles;
+    if (kpiP) kpiP.textContent = ponentesVisibles;
+}
+
+function limpiarFiltros() {
+    document.getElementById('buscadorGlobal').value = '';
+    document.getElementById('flt_dia').value = '';
+    if (!SALA_BLOQUEADA) {
+        document.getElementById('flt_sala').value = '';
+    }
+    document.getElementById('flt_estado').value = '';
+    filtrarAgenda();
+}
+
+window.addEventListener('pywebviewready', recargarDatos);
+</script>
+</body>
+</html>
+"""
+
+
+class ApiBridge:
+    def __init__(self, window):
+        self._window = window
+
+    def ir_a_red(self):
+        self._window.load_html(HTML_RED)
+
+    def ir_a_agenda(self):
+        self._window.load_html(HTML_APP)
+
+    def obtener_estado_red(self):
+        config, _, ruta_activa = cargar_datos_congreso()
+        return _construir_info_red(config, ruta_activa)
+
+    def obtener_datos_agenda(self):
+        ruta_activa = obtener_ruta_base()
+        try:
+            config, df, ruta_activa = cargar_datos_congreso()
+            ruta_backup = obtener_ruta_backup_local()
+            crear_acceso_directo_escritorio()
+
+            if config is None or df is None:
+                return {
+                    "ok": True,
+                    "config_cargada": False,
+                    "ruta_activa": ruta_activa,
+                    "ruta_backup": ruta_backup,
+                }
+
+            columnas_raw = list(df.columns)
+            n3_cols_resueltas = resolver_columnas_nivel_3(config, columnas_raw)
+            columnas_ordenadas = ordenar_columnas_por_nivel_3(columnas_raw, n3_cols_resueltas, config)
+
+            if n3_cols_resueltas:
+                df = df.sort_values(
+                    by=n3_cols_resueltas,
+                    key=lambda s: s.astype(str).str.replace("\xa0", " ", regex=False).str.lower().str.strip(),
+                    kind="mergesort",
+                )
+
+            col_sala = config.get("nivel_1") or buscar_columna(columnas_raw, ["sala"])
+            col_dia = config.get("nivel_2") or buscar_columna(columnas_raw, ["dia", "fecha"])
+            col_titulo_ponencia = buscar_columna(columnas_raw, ["titulo ponencia", "ponencia", "comunicacion", "titulo charla"])
+            formato_dia_nn = bool(config.get("formato_dia_nn", True))
+
+            puesto_bloqueado = config.get("_puesto_bloqueado")
+            puesto_activo = puesto_bloqueado or ""
+            es_admin = str(puesto_activo).upper().startswith("ADM") or puesto_activo == ""
+            sala_restringida = None if (not puesto_activo or es_admin) else sanitize_name(puesto_activo)
+
+            sesiones_map = {}
+            sesiones_agrupadas = []
+            dias_unicos = []
+            salas_unicas = []
+
+            for _, row in df.iterrows():
+                ruta_sesion = construir_ruta_sesion(row, config, columnas_raw)
+                sala_val = sanitize_name(row[col_sala]) if (col_sala and col_sala in row and str(row[col_sala]).strip()) else ""
+                if sala_val == "_vacio":
+                    sala_val = ""
+                raw_dia = row[col_dia] if col_dia and col_dia in row else ""
+                dia_val = formatear_dia_valor(raw_dia) if (col_dia and formato_dia_nn) else (str(raw_dia).strip() or "Sin Día")
+
+                if dia_val and dia_val not in dias_unicos:
+                    dias_unicos.append(dia_val)
+                if sala_val and sala_val not in salas_unicas:
+                    salas_unicas.append(sala_val)
+
+                if ruta_sesion not in sesiones_map:
+                    campos_n3 = []
+                    for c in (n3_cols_resueltas or columnas_ordenadas[:5]):
+                        if c in row:
+                            val_c = str(row[c]).replace("\xa0", " ").strip()
+                            if val_c:
+                                campos_n3.append({"etiqueta": c, "valor": val_c})
+
+                    meta_textos = [f"{m['etiqueta']} {m['valor']}" for m in campos_n3]
+                    texto_sesion = " ".join([ruta_sesion, sala_val, dia_val] + meta_textos)
+                    sesion_obj = {
+                        "ruta_sesion": ruta_sesion,
+                        "sala": sala_val,
+                        "dia": dia_val,
+                        "campos_nivel_3": campos_n3,
+                        "texto_busqueda": texto_sesion,
+                        "ponentes": [],
+                        "_ponentes_vistos": set(),
+                    }
+                    sesiones_map[ruta_sesion] = sesion_obj
+                    sesiones_agrupadas.append(sesion_obj)
+                else:
+                    sesion_obj = sesiones_map[ruta_sesion]
+
+                participantes = obtener_participantes_fila(row, columnas_raw, config) or ["Sin ponente"]
+                detalle_extra = str(row[col_titulo_ponencia]).replace("\xa0", " ").strip() if (col_titulo_ponencia and col_titulo_ponencia in row) else ""
+                datos_fila_txt = " ".join(str(row[c]).replace("\xa0", " ") for c in columnas_raw if c in row)
+
+                for p in participantes:
+                    p_san = sanitize_name(p)
+                    clave_p = re.sub(r"\s+", " ", p_san.lower()).strip()
+                    if clave_p in sesion_obj["_ponentes_vistos"]:
+                        continue
+                    sesion_obj["_ponentes_vistos"].add(clave_p)
+
+                    ruta_carpeta = os.path.join(ruta_sesion, p_san) if p_san != "_vacio" else ruta_sesion
+                    ruta_abs = os.path.join(ruta_activa, ruta_carpeta)
+                    num_archivos = contar_archivos_en_carpeta(ruta_abs)
+                    tiene_ppt = num_archivos > 0
+
+                    sesion_obj["ponentes"].append({
+                        "ponente": p,
+                        "detalle_extra": detalle_extra,
+                        "ruta_carpeta": ruta_carpeta,
+                        "tiene_ppt": tiene_ppt,
+                        "num_archivos": num_archivos,
+                        "texto_busqueda": f"{p} {detalle_extra} {datos_fila_txt}",
+                    })
+
+            for s in sesiones_agrupadas:
+                s.pop("_ponentes_vistos", None)
+
+            total_ponentes = sum(len(s["ponentes"]) for s in sesiones_agrupadas)
+            con_archivo = sum(1 for s in sesiones_agrupadas for p in s["ponentes"] if p["tiene_ppt"])
+            archivos_backup = contar_archivos_en_carpeta(ruta_backup)
+
+            return {
+                "ok": True,
+                "config_cargada": True,
+                "workgroup": config.get("workgroup", "N/A"),
+                "equipos": config.get("equipos", []),
+                "sesiones_agrupadas": sesiones_agrupadas,
+                "total_ponentes": total_ponentes,
+                "con_archivo": con_archivo,
+                "dias_unicos": dias_unicos,
+                "salas_unicas": salas_unicas,
+                "puesto_activo": puesto_activo,
+                "puesto_bloqueado": puesto_bloqueado,
+                "sala_restringida": sala_restringida,
+                "es_admin": es_admin,
+                "archivos_backup": archivos_backup,
+                "ruta_backup": ruta_backup,
+            }
+        except Exception:
+            self._window.load_html(
+                _render_simple(HTML_ERROR, ruta_activa=ruta_activa, detalle_error=traceback.format_exc())
+            )
+            return {"ok": False}
+
+    def fijar_puesto(self, puesto):
+        config, _, _ = cargar_datos_congreso()
+        if config is None:
+            return {"ok": False, "mensaje": "No hay configuración cargada."}
+        puesto = (puesto or "").strip()
+        if puesto not in config.get("equipos", []):
+            return {"ok": False, "mensaje": "Puesto no válido."}
+
+        with open(config["_ruta_puesto_sesion"], "w", encoding="utf-8") as fp:
+            json.dump({"puesto": puesto}, fp)
+
+        if not puesto.upper().startswith("ADM"):
+            return {"ok": True, "mensaje": f"Sala '{puesto}' fijada y bloqueada (solo lectura)."}
+        return {"ok": True, "mensaje": f"Puesto ADMIN '{puesto}' activado."}
+
+    def crear_carpetas(self):
+        config, df, ruta_activa = cargar_datos_congreso()
+        if config is None:
+            return {"ok": False, "mensaje": "Faltan archivos de configuración."}
+        puesto = config.get("_puesto_bloqueado") or ""
+        if puesto and not puesto.upper().startswith("ADM"):
+            return {"ok": False, "mensaje": "Solo los puestos ADMIN pueden crear o modificar carpetas."}
+
+        ruta_bk = obtener_ruta_backup_local()
+        crear_acceso_directo_escritorio()
+
+        columnas_raw = list(df.columns)
+        creadas = 0
+        rutas_creadas = set()
+
+        for _, row in df.iterrows():
+            ruta_sesion = construir_ruta_sesion(row, config, columnas_raw)
+            ruta_abs = os.path.join(ruta_activa, ruta_sesion)
+            if ruta_abs not in rutas_creadas and not os.path.exists(ruta_abs):
+                os.makedirs(ruta_abs, exist_ok=True)
+                rutas_creadas.add(ruta_abs)
+                creadas += 1
+
+            for p in obtener_participantes_fila(row, columnas_raw, config):
+                p_san = sanitize_name(p)
+                if p_san == "_vacio":
+                    continue
+                p_abs = os.path.join(ruta_abs, p_san)
+                if p_abs not in rutas_creadas and not os.path.exists(p_abs):
+                    os.makedirs(p_abs, exist_ok=True)
+                    rutas_creadas.add(p_abs)
+                    creadas += 1
+
+        copiados_bk = sincronizar_estructura_backup_local(ruta_activa)
+        return {
+            "ok": True,
+            "mensaje": f"Carpetas listas ({creadas} nuevas). {ruta_bk} sincronizado ({copiados_bk} archivos copiados, sin borrar nada).",
+        }
+
+    def abrir_ruta(self, ruta_rel, crear=True):
+        config, _, ruta_activa = cargar_datos_congreso()
+        ruta_rel = ruta_rel or "PPT"
+        puesto = config.get("_puesto_bloqueado") or "" if config else ""
+        es_admin = (not puesto) or puesto.upper().startswith("ADM")
+
+        ruta_abs = os.path.join(ruta_activa, ruta_rel)
+        if crear and es_admin:
+            os.makedirs(ruta_abs, exist_ok=True)
+        elif not os.path.exists(ruta_abs):
+            return {"ok": False, "mensaje": "La carpeta aún no existe en disco."}
+
+        if SISTEMA == "Windows":
+            os.startfile(ruta_abs)
+        elif SISTEMA == "Darwin":
+            subprocess.Popen(["open", ruta_abs])
+        else:
+            subprocess.Popen(["xdg-open", ruta_abs])
+        return {"ok": True}
+
+    def subir_presentacion_b64(self, nombre_archivo, ruta_rel, base64_data):
+        config, _, ruta_activa = cargar_datos_congreso()
+        puesto = config.get("_puesto_bloqueado") or "" if config else ""
+        if puesto and not puesto.upper().startswith("ADM"):
+            return {"ok": False, "mensaje": "Acceso denegado: las salas solo pueden ver presentaciones."}
+
+        if not nombre_archivo or not base64_data:
+            return {"ok": False, "mensaje": "No se seleccionó ningún archivo."}
+
+        ruta_rel = ruta_rel or "PPT"
+        carpeta_destino = os.path.join(ruta_activa, ruta_rel)
+        os.makedirs(carpeta_destino, exist_ok=True)
+        nombre_base, ext = os.path.splitext(nombre_archivo)
+        nombre_seguro = sanitize_name(nombre_base) + sanitize_name(ext).replace("_vacio", "")
+        destino_ppt_abs = os.path.join(carpeta_destino, nombre_seguro)
+
+        with open(destino_ppt_abs, "wb") as f:
+            f.write(base64.b64decode(base64_data))
+
+        ruta_bk_copia = copiar_a_backup_local_sin_borrar(ruta_rel, nombre_seguro, destino_ppt_abs)
+        crear_acceso_directo_escritorio()
+
+        return {
+            "ok": True,
+            "mensaje": f"Presentación '{nombre_seguro}' cargada en {ruta_rel} y copiada a {ruta_bk_copia} (sin borrar nada).",
+        }
 
 
 def limpiar_bloqueo_al_salir(ruta_archivo_bloqueo):
@@ -462,667 +1483,30 @@ def limpiar_bloqueo_al_salir(ruta_archivo_bloqueo):
         pass
 
 
-class CongresoAppEscritorio:
-    def __init__(self, root):
-        self.root = root
-        self.root.title("CongresoApp | Agenda por Sesiones")
-        self.root.geometry("1220x780")
-        self.root.configure(bg="#111726")
-
-        self.config, self.df, self.ruta_activa = cargar_datos_congreso()
-        self.ruta_backup = obtener_ruta_backup_local()
-        crear_acceso_directo_escritorio()
-
-        self.ruta_bloqueo = self.config.get("_ruta_puesto_sesion") if self.config else None
-        limpiar_bloqueo_al_salir(self.ruta_bloqueo)
-        if self.config is not None:
-            self.config["_puesto_bloqueado"] = None
-
-        self.filas_agenda = []
-        self._configurar_estilos()
-        self._construir_interfaz()
-        self._cargar_agenda()
-        self.root.protocol("WM_DELETE_WINDOW", self._al_cerrar)
-
-    def _configurar_estilos(self):
-        style = ttk.Style(self.root)
-        try:
-            style.theme_use("clam")
-        except Exception:
-            pass
-        style.configure("TNotebook", background="#1f2940", borderwidth=0)
-        style.configure(
-            "TNotebook.Tab",
-            background="#151d30",
-            foreground="#cbd5e1",
-            padding=[14, 8],
-            font=("Roboto", 10, "bold"),
-        )
-        style.map(
-            "TNotebook.Tab",
-            background=[("selected", "#0162e8")],
-            foreground=[("selected", "#ffffff")],
-        )
-        style.configure(
-            "Treeview",
-            background="#151d30",
-            foreground="#f8fafc",
-            fieldbackground="#151d30",
-            rowheight=30,
-            font=("Roboto", 10),
-        )
-        style.configure(
-            "Treeview.Heading",
-            background="#1f2940",
-            foreground="#38bdf8",
-            font=("Roboto", 10, "bold"),
-        )
-        style.map("Treeview", background=[("selected", "#0162e8")], foreground=[("selected", "#ffffff")])
-
-    def _puesto_actual(self):
-        return (self.config or {}).get("_puesto_bloqueado") or ""
-
-    def _es_admin(self):
-        puesto = self._puesto_actual()
-        return (not puesto) or str(puesto).upper().startswith("ADM")
-
-    def _sala_restringida(self):
-        puesto = self._puesto_actual()
-        if not puesto or self._es_admin():
-            return None
-        return sanitize_name(puesto).lower()
-
-    def _construir_interfaz(self):
-        topbar = tk.Frame(self.root, bg="#1f2940", padx=18, pady=10)
-        topbar.pack(fill="x")
-
-        tk.Label(
-            topbar,
-            text="CongresoApp",
-            bg="#1f2940",
-            fg="#ffffff",
-            font=("Roboto", 16, "bold"),
-        ).pack(side="left")
-
-        ip_local = obtener_ip_local()
-        wg = (self.config or {}).get("workgroup", "N/A")
-        self.lbl_estado_top = tk.Label(
-            topbar,
-            text=f"IP: {ip_local}  |  Grupo: {wg}  |  Backup: {self.ruta_backup}",
-            bg="#1f2940",
-            fg="#94a3b8",
-            font=("Roboto", 9),
-        )
-        self.lbl_estado_top.pack(side="right")
-
-        if self.config is None or self.df is None:
-            aviso = tk.Frame(self.root, bg="#1f2940", padx=24, pady=24)
-            aviso.pack(fill="both", expand=True, padx=20, pady=20)
-            tk.Label(
-                aviso,
-                text="No se encontraron programa.xlsx y config_congreso.json",
-                bg="#1f2940",
-                fg="#fbbf24",
-                font=("Roboto", 14, "bold"),
-            ).pack(pady=(0, 8))
-            tk.Label(
-                aviso,
-                text=f"Colócalos en la misma carpeta del ejecutable:\n{self.ruta_activa}",
-                bg="#1f2940",
-                fg="#e2e8f0",
-                font=("Roboto", 11),
-            ).pack(pady=(0, 16))
-            tk.Button(
-                aviso,
-                text="Reintentar",
-                bg="#0162e8",
-                fg="#ffffff",
-                relief="flat",
-                padx=16,
-                pady=8,
-                command=self._recargar_todo,
-            ).pack()
-            return
-
-        notebook = ttk.Notebook(self.root)
-        notebook.pack(fill="both", expand=True, padx=14, pady=12)
-
-        self.tab_agenda = tk.Frame(notebook, bg="#111726")
-        self.tab_red = tk.Frame(notebook, bg="#111726")
-        notebook.add(self.tab_agenda, text="Agenda y Ponentes")
-        notebook.add(self.tab_red, text="Red, Puestos y Backup")
-
-        self._construir_tab_agenda()
-        self._construir_tab_red()
-
-    def _construir_tab_agenda(self):
-        puesto_box = tk.Frame(self.tab_agenda, bg="#1f2940", padx=14, pady=10)
-        puesto_box.pack(fill="x", padx=6, pady=(6, 10))
-
-        tk.Label(
-            puesto_box,
-            text="Puesto de trabajo:",
-            bg="#1f2940",
-            fg="#ffffff",
-            font=("Roboto", 10, "bold"),
-        ).pack(side="left", padx=(0, 8))
-
-        equipos = self.config.get("equipos", [])
-        self.combo_puesto = ttk.Combobox(puesto_box, values=equipos, state="readonly", width=22)
-        if equipos:
-            self.combo_puesto.current(0)
-        self.combo_puesto.pack(side="left", padx=(0, 8))
-
-        self.btn_fijar_puesto = tk.Button(
-            puesto_box,
-            text="Confirmar y Bloquear",
-            bg="#029666",
-            fg="#ffffff",
-            relief="flat",
-            padx=12,
-            pady=4,
-            command=self._fijar_puesto,
-        )
-        self.btn_fijar_puesto.pack(side="left", padx=(0, 14))
-
-        self.lbl_rol_puesto = tk.Label(
-            puesto_box,
-            text="Sin fijar (ADMIN)",
-            bg="#1f2940",
-            fg="#38bdf8",
-            font=("Roboto", 10, "bold"),
-        )
-        self.lbl_rol_puesto.pack(side="left")
-
-        kpi_frame = tk.Frame(self.tab_agenda, bg="#111726")
-        kpi_frame.pack(fill="x", padx=6, pady=(0, 10))
-
-        self.lbl_kpi_sesiones = tk.Label(
-            kpi_frame, text="Sesiones: 0", bg="#0162e8", fg="#ffffff", font=("Roboto", 11, "bold"), padx=14, pady=8
-        )
-        self.lbl_kpi_sesiones.pack(side="left", padx=(0, 10))
-
-        self.lbl_kpi_ponentes = tk.Label(
-            kpi_frame, text="Ponentes: 0", bg="#d9264a", fg="#ffffff", font=("Roboto", 11, "bold"), padx=14, pady=8
-        )
-        self.lbl_kpi_ponentes.pack(side="left", padx=(0, 10))
-
-        self.lbl_kpi_cargadas = tk.Label(
-            kpi_frame, text="Cargadas: 0 / 0", bg="#029666", fg="#ffffff", font=("Roboto", 11, "bold"), padx=14, pady=8
-        )
-        self.lbl_kpi_cargadas.pack(side="left", padx=(0, 10))
-
-        self.lbl_kpi_backup = tk.Label(
-            kpi_frame, text="Backup: 0 arch.", bg="#d95f18", fg="#ffffff", font=("Roboto", 11, "bold"), padx=14, pady=8
-        )
-        self.lbl_kpi_backup.pack(side="left")
-
-        filtros = tk.Frame(self.tab_agenda, bg="#1f2940", padx=14, pady=10)
-        filtros.pack(fill="x", padx=6, pady=(0, 10))
-
-        tk.Label(filtros, text="Buscar:", bg="#1f2940", fg="#e2e8f0", font=("Roboto", 9, "bold")).pack(side="left", padx=(0, 4))
-        self.var_busqueda = tk.StringVar()
-        self.var_busqueda.trace_add("write", lambda *_: self._refrescar_tabla())
-        tk.Entry(filtros, textvariable=self.var_busqueda, bg="#151d30", fg="#ffffff", insertbackground="#ffffff", width=26).pack(
-            side="left", padx=(0, 10)
-        )
-
-        tk.Label(filtros, text="Día:", bg="#1f2940", fg="#e2e8f0", font=("Roboto", 9, "bold")).pack(side="left", padx=(0, 4))
-        self.var_dia = tk.StringVar(value="Todos")
-        self.combo_dia = ttk.Combobox(filtros, textvariable=self.var_dia, state="readonly", width=14)
-        self.combo_dia.bind("<<ComboboxSelected>>", lambda *_: self._refrescar_tabla())
-        self.combo_dia.pack(side="left", padx=(0, 10))
-
-        tk.Label(filtros, text="Sala:", bg="#1f2940", fg="#e2e8f0", font=("Roboto", 9, "bold")).pack(side="left", padx=(0, 4))
-        self.var_sala = tk.StringVar(value="Todas")
-        self.combo_sala = ttk.Combobox(filtros, textvariable=self.var_sala, state="readonly", width=22)
-        self.combo_sala.bind("<<ComboboxSelected>>", lambda *_: self._refrescar_tabla())
-        self.combo_sala.pack(side="left", padx=(0, 10))
-
-        tk.Label(filtros, text="Estado:", bg="#1f2940", fg="#e2e8f0", font=("Roboto", 9, "bold")).pack(side="left", padx=(0, 4))
-        self.var_estado = tk.StringVar(value="Todos")
-        self.combo_estado = ttk.Combobox(
-            filtros, textvariable=self.var_estado, values=["Todos", "CARGADA", "PENDIENTE"], state="readonly", width=13
-        )
-        self.combo_estado.bind("<<ComboboxSelected>>", lambda *_: self._refrescar_tabla())
-        self.combo_estado.pack(side="left", padx=(0, 10))
-
-        tk.Button(
-            filtros, text="Limpiar", bg="#334155", fg="#ffffff", relief="flat", padx=10, pady=3, command=self._limpiar_filtros
-        ).pack(side="left")
-
-        tabla_frame = tk.Frame(self.tab_agenda, bg="#111726")
-        tabla_frame.pack(fill="both", expand=True, padx=6, pady=(0, 10))
-
-        columnas = ("estado", "participante", "sesion", "sala", "dia", "carpeta")
-        self.tree = ttk.Treeview(tabla_frame, columns=columnas, show="headings", selectmode="browse")
-        self.tree.heading("estado", text="ESTADO")
-        self.tree.heading("participante", text="PARTICIPANTE / PONENTE")
-        self.tree.heading("sesion", text="SESIÓN")
-        self.tree.heading("sala", text="SALA")
-        self.tree.heading("dia", text="DÍA")
-        self.tree.heading("carpeta", text="SUBCARPETA PPT")
-
-        self.tree.column("estado", width=120, anchor="center")
-        self.tree.column("participante", width=230)
-        self.tree.column("sesion", width=340)
-        self.tree.column("sala", width=170)
-        self.tree.column("dia", width=100, anchor="center")
-        self.tree.column("carpeta", width=240)
-
-        scroll_y = ttk.Scrollbar(tabla_frame, orient="vertical", command=self.tree.yview)
-        self.tree.configure(yscrollcommand=scroll_y.set)
-        self.tree.pack(side="left", fill="both", expand=True)
-        scroll_y.pack(side="right", fill="y")
-
-        acciones = tk.Frame(self.tab_agenda, bg="#1f2940", padx=14, pady=10)
-        acciones.pack(fill="x", padx=6, pady=(0, 6))
-
-        self.btn_generar = tk.Button(
-            acciones,
-            text="Generar Carpetas",
-            bg="#029666",
-            fg="#ffffff",
-            relief="flat",
-            padx=12,
-            pady=6,
-            command=self._generar_carpetas,
-        )
-        self.btn_generar.pack(side="left", padx=(0, 8))
-
-        tk.Button(
-            acciones,
-            text="Abrir Carpeta PPT",
-            bg="#0162e8",
-            fg="#ffffff",
-            relief="flat",
-            padx=12,
-            pady=6,
-            command=lambda: self._abrir_carpeta_rel("PPT"),
-        ).pack(side="left", padx=(0, 8))
-
-        tk.Button(
-            acciones,
-            text="Abrir Subcarpeta Seleccionada",
-            bg="#2563eb",
-            fg="#ffffff",
-            relief="flat",
-            padx=12,
-            pady=6,
-            command=self._abrir_subcarpeta_seleccionada,
-        ).pack(side="left", padx=(0, 8))
-
-        self.btn_subir = tk.Button(
-            acciones,
-            text="Subir Presentación...",
-            bg="#059669",
-            fg="#ffffff",
-            relief="flat",
-            padx=12,
-            pady=6,
-            command=self._subir_presentacion,
-        )
-        self.btn_subir.pack(side="left", padx=(0, 8))
-
-        tk.Button(
-            acciones,
-            text="Actualizar Estado",
-            bg="#475569",
-            fg="#ffffff",
-            relief="flat",
-            padx=12,
-            pady=6,
-            command=self._cargar_agenda,
-        ).pack(side="right")
-
-    def _construir_tab_red(self):
-        panel = tk.Frame(self.tab_red, bg="#1f2940", padx=20, pady=20)
-        panel.pack(fill="both", expand=True, padx=10, pady=10)
-
-        tk.Label(
-            panel,
-            text="Estado de Equipo, Rutas y Backup Local",
-            bg="#1f2940",
-            fg="#ffffff",
-            font=("Roboto", 13, "bold"),
-        ).pack(anchor="w", pady=(0, 12))
-
-        self.txt_red = tk.Text(
-            panel,
-            bg="#151d30",
-            fg="#e2e8f0",
-            font=("Consolas", 10),
-            height=22,
-            relief="flat",
-            padx=14,
-            pady=14,
-        )
-        self.txt_red.pack(fill="both", expand=True, pady=(0, 12))
-
-        tk.Button(
-            panel,
-            text="Abrir Carpeta BACKUP_LOCAL",
-            bg="#0162e8",
-            fg="#ffffff",
-            relief="flat",
-            padx=14,
-            pady=6,
-            command=lambda: abrir_carpeta_en_sistema(self.ruta_backup),
-        ).pack(side="left", padx=(0, 8))
-
-        tk.Button(
-            panel,
-            text="Refrescar Información",
-            bg="#475569",
-            fg="#ffffff",
-            relief="flat",
-            padx=14,
-            pady=6,
-            command=self._actualizar_info_red,
-        ).pack(side="left")
-
-    def _actualizar_permisos_ui(self):
-        es_adm = self._es_admin()
-        puesto = self._puesto_actual()
-        if puesto:
-            self.lbl_rol_puesto.config(
-                text=f"Bloqueado en {puesto} ({'ADMIN' if es_adm else 'SALA - SOLO LECTURA'})",
-                fg="#48d6a8" if es_adm else "#fbbf24",
-            )
-            self.btn_fijar_puesto.config(state="disabled")
-            self.combo_puesto.config(state="disabled")
-        else:
-            self.lbl_rol_puesto.config(text="Sin fijar (ADMIN)", fg="#38bdf8")
-
-        self.btn_generar.config(state="normal" if es_adm else "disabled")
-        self.btn_subir.config(state="normal" if es_adm else "disabled")
-
-        sala_bloq = self._sala_restringida()
-        if sala_bloq:
-            for idx, val in enumerate(self.combo_sala["values"]):
-                if val.lower() == sala_bloq:
-                    self.combo_sala.current(idx)
-                    break
-            self.combo_sala.config(state="disabled")
-        else:
-            self.combo_sala.config(state="readonly")
-
-    def _fijar_puesto(self):
-        puesto = self.combo_puesto.get().strip()
-        if not puesto:
-            return
-        if self.ruta_bloqueo:
-            with open(self.ruta_bloqueo, "w", encoding="utf-8") as fp:
-                json.dump({"puesto": puesto}, fp)
-        self.config["_puesto_bloqueado"] = puesto
-        self._actualizar_permisos_ui()
-        self._refrescar_tabla()
-        messagebox.showinfo("Puesto fijado", f"Puesto '{puesto}' fijado para esta sesión.")
-
-    def _cargar_agenda(self):
-        if self.config is None or self.df is None:
-            return
-
-        columnas_raw = list(self.df.columns)
-        n3_cols = resolver_columnas_nivel_3(self.config, columnas_raw)
-        df_ordenado = self.df
-        if n3_cols:
-            df_ordenado = self.df.sort_values(
-                by=n3_cols,
-                key=lambda s: s.astype(str).str.replace("\xa0", " ", regex=False).str.lower().str.strip(),
-                kind="mergesort",
-            )
-
-        col_sala = self.config.get("nivel_1") or buscar_columna(columnas_raw, ["sala"])
-        col_dia = self.config.get("nivel_2") or buscar_columna(columnas_raw, ["dia", "fecha"])
-        formato_dia_nn = bool(self.config.get("formato_dia_nn", True))
-
-        sesiones_map = {}
-        dias_unicos = ["Todos"]
-        salas_unicas = ["Todas"]
-        filas = []
-
-        for _, row in df_ordenado.iterrows():
-            ruta_sesion = construir_ruta_sesion(row, self.config, columnas_raw)
-            sala_val = sanitize_name(row[col_sala]) if (col_sala and col_sala in row and str(row[col_sala]).strip()) else ""
-            if sala_val == "_vacio":
-                sala_val = ""
-            raw_dia = row[col_dia] if col_dia and col_dia in row else ""
-            dia_val = formatear_dia_valor(raw_dia) if (col_dia and formato_dia_nn) else (str(raw_dia).strip() or "Sin Día")
-
-            if dia_val and dia_val not in dias_unicos:
-                dias_unicos.append(dia_val)
-            if sala_val and sala_val not in salas_unicas:
-                salas_unicas.append(sala_val)
-
-            if ruta_sesion not in sesiones_map:
-                campos_txt = []
-                for c in n3_cols:
-                    if c in row and str(row[c]).strip():
-                        campos_txt.append(f"{c}: {str(row[c]).replace(chr(160), ' ').strip()}")
-                sesiones_map[ruta_sesion] = {
-                    "titulo": " | ".join(campos_txt) if campos_txt else ruta_sesion,
-                    "vistos": set(),
-                }
-
-            sesion_info = sesiones_map[ruta_sesion]
-            participantes = obtener_participantes_fila(row, columnas_raw, self.config) or ["Sin ponente"]
-            datos_fila = " ".join(str(row[c]).replace("\xa0", " ") for c in columnas_raw if c in row)
-
-            for p in participantes:
-                p_san = sanitize_name(p)
-                clave_p = re.sub(r"\s+", " ", p_san.lower()).strip()
-                if clave_p in sesion_info["vistos"]:
-                    continue
-                sesion_info["vistos"].add(clave_p)
-
-                ruta_carpeta = os.path.join(ruta_sesion, p_san) if p_san != "_vacio" else ruta_sesion
-                ruta_abs = os.path.join(self.ruta_activa, ruta_carpeta)
-                num_archivos = contar_archivos_en_carpeta(ruta_abs)
-                estado = f"CARGADA ({num_archivos})" if num_archivos > 0 else "PENDIENTE"
-
-                filas.append({
-                    "estado": estado,
-                    "es_cargada": num_archivos > 0,
-                    "participante": p,
-                    "sesion": sesion_info["titulo"],
-                    "ruta_sesion": ruta_sesion,
-                    "sala": sala_val,
-                    "dia": dia_val,
-                    "carpeta": ruta_carpeta,
-                    "busqueda": f"{p} {sesion_info['titulo']} {sala_val} {dia_val} {ruta_carpeta} {datos_fila}".lower(),
-                })
-
-        self.filas_agenda = filas
-        self.combo_dia["values"] = dias_unicos
-        if self.var_dia.get() not in dias_unicos:
-            self.var_dia.set("Todos")
-
-        self.combo_sala["values"] = salas_unicas
-        if self.var_sala.get() not in salas_unicas:
-            self.var_sala.set("Todas")
-
-        self._actualizar_permisos_ui()
-        self._refrescar_tabla()
-        self._actualizar_info_red()
-
-    def _refrescar_tabla(self):
-        for item in self.tree.get_children():
-            self.tree.delete(item)
-
-        q = self.var_busqueda.get().lower().strip()
-        dia_sel = self.var_dia.get()
-        sala_sel = self.var_sala.get()
-        estado_sel = self.var_estado.get()
-        sala_bloq = self._sala_restringida()
-
-        sesiones_visibles = set()
-        ponentes_visibles = 0
-        cargadas_visibles = 0
-
-        for f in self.filas_agenda:
-            if sala_bloq and f["sala"].lower() != sala_bloq:
-                continue
-            if sala_sel and sala_sel != "Todas" and f["sala"] != sala_sel:
-                continue
-            if dia_sel and dia_sel != "Todos" and f["dia"] != dia_sel:
-                continue
-            if estado_sel == "CARGADA" and not f["es_cargada"]:
-                continue
-            if estado_sel == "PENDIENTE" and f["es_cargada"]:
-                continue
-            if q and q not in f["busqueda"]:
-                continue
-
-            self.tree.insert(
-                "",
-                "end",
-                values=(f["estado"], f["participante"], f["sesion"], f["sala"], f["dia"], f["carpeta"]),
-            )
-            sesiones_visibles.add(f["ruta_sesion"])
-            ponentes_visibles += 1
-            if f["es_cargada"]:
-                cargadas_visibles += 1
-
-        archivos_bk = contar_archivos_en_carpeta(self.ruta_backup)
-        self.lbl_kpi_sesiones.config(text=f"Sesiones: {len(sesiones_visibles)}")
-        self.lbl_kpi_ponentes.config(text=f"Ponentes: {ponentes_visibles}")
-        self.lbl_kpi_cargadas.config(text=f"Cargadas: {cargadas_visibles} / {ponentes_visibles}")
-        self.lbl_kpi_backup.config(text=f"Backup: {archivos_bk} arch.")
-
-    def _limpiar_filtros(self):
-        self.var_busqueda.set("")
-        self.var_dia.set("Todos")
-        if not self._sala_restringida():
-            self.var_sala.set("Todas")
-        self.var_estado.set("Todos")
-        self._refrescar_tabla()
-
-    def _generar_carpetas(self):
-        if not self._es_admin():
-            messagebox.showwarning("Solo lectura", "Solo los puestos ADMIN pueden generar carpetas.")
-            return
-
-        columnas_raw = list(self.df.columns)
-        creadas = 0
-        rutas_creadas = set()
-
-        for _, row in self.df.iterrows():
-            ruta_sesion = construir_ruta_sesion(row, self.config, columnas_raw)
-            ruta_abs = os.path.join(self.ruta_activa, ruta_sesion)
-            if ruta_abs not in rutas_creadas and not os.path.exists(ruta_abs):
-                os.makedirs(ruta_abs, exist_ok=True)
-                rutas_creadas.add(ruta_abs)
-                creadas += 1
-
-            for p in obtener_participantes_fila(row, columnas_raw, self.config):
-                p_san = sanitize_name(p)
-                if p_san == "_vacio":
-                    continue
-                p_abs = os.path.join(ruta_abs, p_san)
-                if p_abs not in rutas_creadas and not os.path.exists(p_abs):
-                    os.makedirs(p_abs, exist_ok=True)
-                    rutas_creadas.add(p_abs)
-                    creadas += 1
-
-        copiados_bk = sincronizar_estructura_backup_local(self.ruta_activa)
-        self._cargar_agenda()
-        messagebox.showinfo(
-            "Carpetas generadas",
-            f"Carpetas listas ({creadas} nuevas). Backup sincronizado ({copiados_bk} archivos copiados).",
-        )
-
-    def _abrir_carpeta_rel(self, ruta_rel):
-        ruta_abs = os.path.join(self.ruta_activa, ruta_rel)
-        if self._es_admin():
-            os.makedirs(ruta_abs, exist_ok=True)
-        elif not os.path.exists(ruta_abs):
-            messagebox.showwarning("Carpeta no existe", "La carpeta aún no existe en disco.")
-            return
-        abrir_carpeta_en_sistema(ruta_abs)
-
-    def _abrir_subcarpeta_seleccionada(self):
-        sel = self.tree.selection()
-        if not sel:
-            messagebox.showinfo("Selección", "Selecciona primero una fila de la agenda.")
-            return
-        valores = self.tree.item(sel[0], "values")
-        if len(valores) >= 6:
-            self._abrir_carpeta_rel(valores[5])
-
-    def _subir_presentacion(self):
-        if not self._es_admin():
-            messagebox.showwarning("Solo lectura", "Solo los puestos ADMIN pueden subir presentaciones.")
-            return
-        sel = self.tree.selection()
-        if not sel:
-            messagebox.showinfo("Selección", "Selecciona primero una fila de la agenda.")
-            return
-        valores = self.tree.item(sel[0], "values")
-        ruta_rel = valores[5]
-        archivo_origen = filedialog.askopenfilename(title="Seleccionar presentación")
-        if not archivo_origen:
-            return
-
-        carpeta_destino = os.path.join(self.ruta_activa, ruta_rel)
-        os.makedirs(carpeta_destino, exist_ok=True)
-        nombre_base, ext = os.path.splitext(os.path.basename(archivo_origen))
-        nombre_seguro = sanitize_name(nombre_base) + sanitize_name(ext).replace("_vacio", "")
-        destino_ppt_abs = os.path.join(carpeta_destino, nombre_seguro)
-        shutil.copy2(archivo_origen, destino_ppt_abs)
-
-        copia_bk = copiar_a_backup_local_sin_borrar(ruta_rel, nombre_seguro, destino_ppt_abs)
-        crear_acceso_directo_escritorio()
-        self._cargar_agenda()
-        messagebox.showinfo(
-            "Presentación cargada",
-            f"Guardada en:\n{destino_ppt_abs}\n\nCopia de seguridad en:\n{copia_bk}",
-        )
-
-    def _actualizar_info_red(self):
-        if not hasattr(self, "txt_red"):
-            return
-        ip_local = obtener_ip_local()
-        hostname = socket.gethostname()
-        wg = (self.config or {}).get("workgroup", "N/A")
-        puesto = self._puesto_actual() or "Sin fijar"
-        ruta_ppt = os.path.join(self.ruta_activa, "PPT")
-        acceso_esc = crear_acceso_directo_escritorio() or "No disponible"
-        archivos_bk = contar_archivos_en_carpeta(self.ruta_backup)
-
-        lineas = [
-            f"IP Local:            {ip_local}",
-            f"Nombre Equipo:       {hostname}",
-            f"Workgroup:           {wg}",
-            f"Puesto Activo:       {puesto}",
-            f"Carpeta Ejecutable:  {self.ruta_activa}",
-            f"Carpeta PPT:         {ruta_ppt}",
-            f"Backup Local Raíz:   {self.ruta_backup} ({archivos_bk} archivos — nunca borra nada)",
-            f"Acceso Escritorio:   {acceso_esc}",
-            "",
-            "--- PUESTOS CONFIGURADOS ---",
-        ]
-        for eq in (self.config or {}).get("equipos", []):
-            rol = "ADMIN (Carga y carpetas)" if str(eq).upper().startswith("ADM") else "SALA (Solo lectura)"
-            estado = "Bloqueado aquí" if puesto.upper() == str(eq).upper() else "Disponible"
-            lineas.append(f"  * {eq:<24} | {rol:<24} | {estado}")
-
-        self.txt_red.delete("1.0", "end")
-        self.txt_red.insert("1.0", "\n".join(lineas))
-
-    def _recargar_todo(self):
-        self.config, self.df, self.ruta_activa = cargar_datos_congreso()
-        for w in self.root.winfo_children():
-            w.destroy()
-        self._construir_interfaz()
-        self._cargar_agenda()
-
-    def _al_cerrar(self):
-        limpiar_bloqueo_al_salir(self.ruta_bloqueo)
-        self.root.destroy()
-
-
 if __name__ == "__main__":
-    root = tk.Tk()
-    app = CongresoAppEscritorio(root)
-    root.mainloop()
+    cfg, _, _ = cargar_datos_congreso()
+    try:
+        obtener_ruta_backup_local()
+        crear_acceso_directo_escritorio()
+    except Exception:
+        pass
+
+    ruta_bloq = cfg.get("_ruta_puesto_sesion") if cfg else None
+    limpiar_bloqueo_al_salir(ruta_bloq)
+
+    window = webview.create_window("CongresoApp | Agenda por Sesiones", html=HTML_APP, width=1360, height=860)
+    api = ApiBridge(window)
+    window.expose(
+        api.ir_a_red,
+        api.ir_a_agenda,
+        api.obtener_estado_red,
+        api.obtener_datos_agenda,
+        api.fijar_puesto,
+        api.crear_carpetas,
+        api.abrir_ruta,
+        api.subir_presentacion_b64,
+    )
+    try:
+        webview.start()
+    finally:
+        limpiar_bloqueo_al_salir(ruta_bloq)

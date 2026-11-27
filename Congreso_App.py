@@ -208,4 +208,241 @@ def construir_ruta_sesion(row, config, columnas_raw):
     partes = ["PPT"]
     sep_n3 = config.get("separador_nivel_3", " - ")
     max_n3 = int(config.get("max_chars_nivel_3", 50))
-    formato_dia_
+    formato_dia_nn = bool(config.get("formato_dia_nn", True))
+
+    col_sala = config.get("nivel_1") or buscar_columna(columnas_raw, ["sala"])
+    col_dia = config.get("nivel_2") or buscar_columna(columnas_raw, ["dia", "fecha"])
+    n3_cols = resolver_columnas_nivel_3(config, columnas_raw)
+
+    orden_carpetas = config.get("orden_carpetas", [])
+    if orden_carpetas:
+        for item in orden_carpetas:
+            if isinstance(item, list):
+                first_norm = norm_col(item[0]) if item else ""
+                if any(k in first_norm for k in ("participante", "ponente", "autor", "speaker")):
+                    continue
+                partes.append(_formatear_nivel_3(row, n3_cols, sep_n3, max_n3))
+            elif isinstance(item, str) and item in row:
+                if col_dia and item == col_dia and formato_dia_nn:
+                    partes.append(sanitize_name(formatear_dia_valor(row[item])))
+                else:
+                    partes.append(sanitize_name(row[item]))
+        if n3_cols and not any(
+            isinstance(x, list) and not any(k in norm_col(x[0] if x else "") for k in ("participante", "ponente", "autor", "speaker"))
+            for x in orden_carpetas
+        ):
+            partes.append(_formatear_nivel_3(row, n3_cols, sep_n3, max_n3))
+    else:
+        if col_sala and col_sala in row:
+            partes.append(sanitize_name(row[col_sala]))
+        if col_dia and col_dia in row:
+            val_dia = formatear_dia_valor(row[col_dia]) if formato_dia_nn else row[col_dia]
+            partes.append(sanitize_name(val_dia))
+        if n3_cols:
+            partes.append(_formatear_nivel_3(row, n3_cols, sep_n3, max_n3))
+
+    return os.path.join(*partes)
+
+
+def _separar_nombres_celda(raw_val):
+    texto = str(raw_val or "").replace("\xa0", " ").strip()
+    if not texto:
+        return []
+    candidatos = re.split(r"[;|\n\r]+", texto)
+    resultado = []
+    for item in candidatos:
+        parte = item.strip(" \t\r\n-–—")
+        if parte:
+            resultado.append(parte)
+    return resultado
+
+
+def obtener_participantes_fila(row, columnas, config=None):
+    columnas_objetivo = []
+    if config and isinstance(config.get("nivel_4_columnas"), list) and config["nivel_4_columnas"]:
+        for col_cfg in config["nivel_4_columnas"]:
+            if col_cfg in columnas:
+                columnas_objetivo.append(col_cfg)
+            else:
+                encontrada = buscar_columna(columnas, [col_cfg])
+                if encontrada:
+                    columnas_objetivo.append(encontrada)
+
+    if not columnas_objetivo:
+        for c in columnas:
+            nc = norm_col(c)
+            if re.fullmatch(r"participante\s*\d*", nc) or re.fullmatch(r"ponente\s*\d*", nc):
+                columnas_objetivo.append(c)
+
+    participantes = []
+    claves_vistas = set()
+
+    for c in columnas_objetivo:
+        val_celda = row[c] if c in row else ""
+        for nombre in _separar_nombres_celda(val_celda):
+            nombre_san = sanitize_name(nombre)
+            if nombre_san == "_vacio":
+                continue
+            clave = re.sub(r"\s+", " ", nombre_san.lower()).strip()
+            if clave not in claves_vistas:
+                claves_vistas.add(clave)
+                participantes.append(nombre.replace("\xa0", " ").strip())
+
+    return participantes
+
+
+def contar_archivos_en_carpeta(ruta_abs):
+    if not os.path.exists(ruta_abs):
+        return 0
+    total = 0
+    for _, _, files in os.walk(ruta_abs):
+        for f in files:
+            if not f.startswith("."):
+                total += 1
+    return total
+
+
+def ordenar_columnas_por_nivel_3(columnas, n3_cols):
+    ordenadas = []
+    usadas = set()
+
+    for c in n3_cols:
+        if c in columnas and c not in usadas:
+            ordenadas.append(c)
+            usadas.add(c)
+
+    col_id = buscar_columna([c for c in columnas if c not in usadas], ["id"])
+    if col_id:
+        ordenadas.append(col_id)
+        usadas.add(col_id)
+
+    for c in columnas:
+        if c not in usadas:
+            ordenadas.append(c)
+            usadas.add(c)
+
+    return ordenadas
+
+
+app = Flask(__name__)
+
+HTML_ERROR = """<!DOCTYPE html>
+<html lang="es">
+<head><meta charset="UTF-8"><title>Error en Congreso_App</title></head>
+<body style="background:#111726;color:#fff;font-family:sans-serif;padding:30px;">
+  <h2 style="color:#f87171;">Se produjo un error al cargar Congreso_App</h2>
+  <p>Ruta activa detectada: <code>{{ ruta_activa }}</code></p>
+  <pre style="background:#1e293b;padding:16px;border-radius:8px;overflow:auto;color:#fca5a5;">{{ detalle_error }}</pre>
+</body>
+</html>"""
+
+HTML_APP = """<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CongresoApp | Agenda por Sesiones</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@300;400;500;700&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg-body: #111726;
+            --bg-card: #1f2940;
+            --bg-input: #151d30;
+            --border-color: rgba(255, 255, 255, 0.08);
+            --text-main: #ffffff;
+            --text-muted: #94a3b8;
+        }
+        body {
+            background-color: var(--bg-body);
+            color: var(--text-main);
+            font-family: "Roboto", -apple-system, BlinkMacSystemFont, sans-serif;
+            margin: 0;
+            padding-bottom: 50px;
+        }
+        .valex-topbar {
+            background-color: var(--bg-card);
+            border-bottom: 1px solid var(--border-color);
+            padding: 12px 24px;
+        }
+        .brand-logo {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            font-weight: 700;
+            font-size: 1.25rem;
+            color: #fff;
+            text-decoration: none;
+        }
+        .brand-icon {
+            width: 32px;
+            height: 32px;
+            border-radius: 8px;
+            background: linear-gradient(135deg, #0162e8, #00b9ff);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .valex-search {
+            background-color: var(--bg-input);
+            border: 1px solid rgba(56, 189, 248, 0.25);
+            border-radius: 20px;
+            padding: 7px 16px;
+            color: #fff;
+            font-size: 0.88rem;
+            width: 360px;
+        }
+        .valex-search:focus { outline: none; border-color: #00b9ff; box-shadow: 0 0 0 2px rgba(0, 185, 255, 0.18); }
+        .kpi-card {
+            border-radius: 8px;
+            padding: 18px 20px 36px 20px;
+            position: relative;
+            overflow: hidden;
+            color: #fff;
+            box-shadow: 0 4px 15px rgba(0, 0, 0, 0.25);
+            height: 100%;
+        }
+        .kpi-blue { background: linear-gradient(to right, #0162e8 0%, #00b9ff 100%); }
+        .kpi-pink { background: linear-gradient(to right, #f93a5a 0%, #f7778c 100%); }
+        .kpi-green { background: linear-gradient(to right, #029666 0%, #48d6a8 100%); }
+        .kpi-orange { background: linear-gradient(to right, #f76a2d 0%, #efa65f 100%); }
+        .kpi-title { font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.8px; font-weight: 700; opacity: 0.9; margin-bottom: 6px; }
+        .kpi-value { font-size: 1.55rem; font-weight: 700; line-height: 1.2; }
+        .kpi-sub { font-size: 0.78rem; opacity: 0.85; margin-top: 4px; }
+        .kpi-wave { position: absolute; bottom: 0; left: 0; width: 100%; height: 32px; opacity: 0.35; }
+        .valex-card {
+            background-color: var(--bg-card);
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.2);
+        }
+        .valex-card-header {
+            padding: 16px 22px;
+            border-bottom: 1px solid var(--border-color);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 10px;
+        }
+        .valex-card-title { font-size: 0.95rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; margin: 0; }
+        .valex-card-subtitle { font-size: 0.8rem; color: var(--text-muted); margin-top: 2px; }
+        .form-select, .form-control {
+            background-color: var(--bg-input) !important;
+            border: 1px solid rgba(255, 255, 255, 0.14) !important;
+            color: #fff !important;
+            font-size: 0.82rem;
+        }
+        .btn-valex-blue { background: linear-gradient(to right, #0162e8, #00b9ff); border: none; color: #fff; font-weight: 600; }
+        .btn-valex-green { background: linear-gradient(to right, #029666, #48d6a8); border: none; color: #fff; font-weight: 600; }
+        .btn-valex-blue:hover, .btn-valex-green:hover { color: #fff; opacity: 0.92; }
+
+        .sesion-bloque {
+            border-radius: 10px;
+            margin-bottom: 18px;
+            overflow: hidden;
+            box-shadow: 0 6px 18px rgba(0, 0, 0, 0.28);
+        }
+        .sesion-bloque.tema-0 {
+            background-color
